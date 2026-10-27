@@ -252,7 +252,7 @@ Dos archivos nuevos en el grupo `Errors/`. El proyecto compila sin errores ni wa
 
 ## Paso 2 — Implementar Validación de Formulario con `Result<T, E>`
 
-**Objetivo:** Añadir validación robusta al formulario de creación de tareas usando `Result<TaskItem, AppError>` y reemplazar cualquier force-unwrap existente.
+**Objetivo:** Añadir validación robusta al formulario de creación de tareas usando `Result<ValidatedTaskData, AppError>` y reemplazar cualquier force-unwrap existente.
 
 ### Instrucciones
 
@@ -361,20 +361,22 @@ final class AddTaskViewModel: ObservableObject {
 }
 ```
 
-3. Actualiza `AddTaskView.swift` (SwiftUI) para usar el ViewModel con validación:
+3. Actualiza `AddTaskView.swift` (SwiftUI, Lab 02) para usar el ViewModel con validación. **Conserva la firma `AddTaskView(repository:onSave:)`**: la usan `TaskListView` (Lab 02) y `SwiftDataTaskListView` (Lab 04), así que si la cambiaras esas vistas dejarían de compilar. La vista sigue guardando a través del repositorio que recibe, con el modelo de dominio `TaskItem`:
 
 ```swift
 // AddTaskView.swift
 // TaskManagerApp
 
 import SwiftUI
-import SwiftData
 
 struct AddTaskView: View {
 
     @Environment(\.dismiss) private var dismiss
-    @Environment(\.modelContext) private var modelContext
     @StateObject private var viewModel = AddTaskViewModel()
+
+    // MARK: - Dependencias (igual que en el Lab 02)
+    let repository: TaskRepository
+    var onSave: () -> Void
 
     var body: some View {
         NavigationStack {
@@ -409,21 +411,17 @@ struct AddTaskView: View {
     }
 
     private func guardarTarea() {
-        let result = viewModel.createTask()
-
-        switch result {
+        switch viewModel.createTask() {
         case .success(let data):
-            // Crear TaskItem usando SwiftData
-            let newTask = TaskItem(title: data.title, notes: data.notes)
-            modelContext.insert(newTask)
-
-            do {
-                try modelContext.save()
-                dismiss()
-            } catch {
-                let appError = AppError.saveFailed(error.localizedDescription)
-                ErrorHandler.shared.handle(appError)
-            }
+            // Modelo de dominio del Lab 01: taskDescription es opcional
+            let notes = data.notes ?? ""
+            let newTask = TaskItem(
+                title: data.title,
+                taskDescription: notes.isEmpty ? nil : notes
+            )
+            repository.add(newTask)
+            onSave()
+            dismiss()
 
         case .failure:
             // El error ya fue manejado por el ViewModel vía ErrorHandler
@@ -431,9 +429,13 @@ struct AddTaskView: View {
         }
     }
 }
+
+#Preview {
+    AddTaskView(repository: InMemoryTaskRepository(), onSave: {})
+}
 ```
 
-> **Nota:** Si tu modelo `TaskItem` tiene una firma de inicializador diferente (por ejemplo, con parámetros adicionales de Labs anteriores), ajusta la llamada `TaskItem(title:notes:)` según corresponda.
+> **Nota:** El campo "Notas" del formulario se guarda en `taskDescription`, el nombre que usa el modelo desde el Lab 01. Si el repositorio activo es SwiftData, `SwiftDataTaskRepository.add(_:)` (Lab 03) convierte la tarea a `SDTaskItem`, y `@Query` actualiza la lista sola. El interruptor "Marcar como completada" del Lab 02 se quita de este formulario; una tarea nueva empieza pendiente.
 
 4. **Auditoría de force-unwraps:** Busca en todo el proyecto cualquier uso de `!` (force-unwrap) y `try!`:
 
@@ -489,11 +491,11 @@ final class SearchViewModel: ObservableObject {
     @Published var searchText: String = ""
 
     // MARK: - Outputs
-    @Published var filteredTasks: [TaskItem] = []
+    @Published var filteredTasks: [SDTaskItem] = []
     @Published var isSearching: Bool = false
 
     // MARK: - Dependencies
-    private var allTasks: [TaskItem] = []
+    private var allTasks: [SDTaskItem] = []
     private var cancellables = Set<AnyCancellable>()
 
     init() {
@@ -508,7 +510,7 @@ final class SearchViewModel: ObservableObject {
             .handleEvents(receiveOutput: { [weak self] query in
                 self?.isSearching = !query.isEmpty
             })
-            .map { [weak self] query -> [TaskItem] in
+            .map { [weak self] query -> [SDTaskItem] in
                 guard let self = self else { return [] }
 
                 let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -519,7 +521,7 @@ final class SearchViewModel: ObservableObject {
 
                 return self.allTasks.filter { task in
                     task.title.localizedCaseInsensitiveContains(trimmed) ||
-                    (task.notes?.localizedCaseInsensitiveContains(trimmed) ?? false)
+                    task.taskDescription.localizedCaseInsensitiveContains(trimmed)
                 }
             }
             .receive(on: RunLoop.main)
@@ -534,7 +536,7 @@ final class SearchViewModel: ObservableObject {
 
     /// Actualiza la fuente de datos completa.
     /// Llamar cada vez que cambie la lista de tareas en SwiftData.
-    func updateTasks(_ tasks: [TaskItem]) {
+    func updateTasks(_ tasks: [SDTaskItem]) {
         self.allTasks = tasks
         // Re-trigger del filtro con el texto actual
         let current = searchText
@@ -543,83 +545,70 @@ final class SearchViewModel: ObservableObject {
 }
 ```
 
-2. Integra la barra de búsqueda en `TaskListView.swift` usando el modificador `.searchable`:
+2. Integra la barra de búsqueda en `SwiftDataTaskListView.swift`, la vista con `@Query` y sincronización que dejaste en el Lab 04. **No reemplaces el archivo**: haz solo estos cambios, para conservar el botón de sincronización, la alerta y los banners del Lab 04.
+
+   a. Agrega el ViewModel de búsqueda junto a las demás propiedades `@State`:
 
 ```swift
-// TaskListView.swift (actualización)
-// TaskManagerApp
+@StateObject private var searchVM = SearchViewModel()
+```
 
-import SwiftUI
-import SwiftData
+   b. Agrega esta propiedad calculada y reemplaza `deleteTasks(at:)` para que trabajen sobre la lista filtrada:
 
-struct TaskListView: View {
+```swift
+/// Tareas a mostrar: filtradas si hay búsqueda, todas si no.
+private var displayedTasks: [SDTaskItem] {
+    searchVM.searchText.isEmpty ? tasks : searchVM.filteredTasks
+}
 
-    @Environment(\.modelContext) private var modelContext
-    @Query(sort: \TaskItem.createdAt, order: .reverse) private var tasks: [TaskItem]
-
-    @StateObject private var searchVM = SearchViewModel()
-    @State private var showAddTask = false
-
-    var body: some View {
-        NavigationStack {
-            List {
-                ForEach(displayedTasks) { task in
-                    TaskRowView(task: task)
-                }
-                .onDelete(perform: deleteTasks)
-            }
-            .navigationTitle("Mis Tareas")
-            .searchable(
-                text: $searchVM.searchText,
-                placement: .navigationBarDrawer(displayMode: .always),
-                prompt: "Buscar tareas..."
-            )
-            .overlay {
-                if displayedTasks.isEmpty {
-                    ContentUnavailableView.search(text: searchVM.searchText)
-                }
-            }
-            .toolbar {
-                ToolbarItem(placement: .primaryAction) {
-                    Button(action: { showAddTask = true }) {
-                        Image(systemName: "plus")
-                    }
-                }
-            }
-            .sheet(isPresented: $showAddTask) {
-                AddTaskView()
-            }
-            .onChange(of: tasks) { _, newTasks in
-                searchVM.updateTasks(newTasks)
-            }
-            .onAppear {
-                searchVM.updateTasks(tasks)
-            }
-        }
+private func deleteTasks(at offsets: IndexSet) {
+    for index in offsets {
+        modelContext.delete(displayedTasks[index])
     }
-
-    /// Tareas a mostrar: filtradas si hay búsqueda, todas si no.
-    private var displayedTasks: [TaskItem] {
-        searchVM.searchText.isEmpty ? tasks : searchVM.filteredTasks
-    }
-
-    private func deleteTasks(at offsets: IndexSet) {
-        for index in offsets {
-            let task = displayedTasks[index]
-            modelContext.delete(task)
-        }
-        do {
-            try modelContext.save()
-        } catch {
-            ErrorHandler.shared.handle(.deleteFailed(error.localizedDescription))
-        }
+    do {
+        try modelContext.save()
+    } catch {
+        ErrorHandler.shared.handle(.deleteFailed(error.localizedDescription))
     }
 }
 ```
 
-> **Nota:** Si tu `TaskRowView` tiene un nombre o firma diferente, ajústalo. Lo importante es que la lista use `displayedTasks` y la barra de búsqueda esté conectada al `searchVM.searchText`.
+   c. Dentro de `taskListContent`, cambia `ForEach(tasks)` por `ForEach(displayedTasks)`:
 
-3. Compila y ejecuta en el simulador iPhone 15 Pro (⌘R). Crea 3–4 tareas de prueba y verifica que la búsqueda filtra en tiempo real.
+```swift
+List {
+    ForEach(displayedTasks) { task in
+        TaskRowView(task: task.toTaskItem())
+    }
+    .onDelete(perform: deleteTasks)
+}
+```
+
+   d. Añade estos modificadores después de `.navigationTitle("Mis Tareas")`, y agrega `searchVM.updateTasks(tasks)` dentro del `.onAppear` que ya existe:
+
+```swift
+.searchable(
+    text: $searchVM.searchText,
+    placement: .navigationBarDrawer(displayMode: .always),
+    prompt: "Buscar tareas..."
+)
+.overlay {
+    if !searchVM.searchText.isEmpty && displayedTasks.isEmpty {
+        ContentUnavailableView.search(text: searchVM.searchText)
+    }
+}
+.onChange(of: tasks) { _, newTasks in
+    searchVM.updateTasks(newTasks)
+}
+.onAppear {
+    // ... código del Lab 04 que crea el SyncViewModel ...
+    searchVM.updateTasks(tasks)
+}
+```
+
+> **Nota:** Usa un solo `.onAppear`: agrega la línea al que ya tienes en lugar de crear otro. `TaskRowView` (Lab 02) recibe un `TaskItem`, por eso se usa `task.toTaskItem()`. Al sincronizar, las tareas nuevas entran por `@Query` y `.onChange` refresca el buscador.
+
+3. Compila y ejecuta en el simulador iPhone 15 Pro (⌘R). En la lista UIKit toca **SwiftData**, crea 3–4 tareas de prueba (o pulsa **Sincronizar**) y verifica que la búsqueda filtra en tiempo real.
 
 4. Haz commit:
 
@@ -634,7 +623,7 @@ Al escribir en la barra de búsqueda, la lista se filtra tras 300ms de pausa. Al
 
 ### Verificación
 
-- Escribe "ta" → solo aparecen tareas cuyo título o notas contienen "ta".
+- Escribe "ta" → solo aparecen tareas cuyo título o descripción contienen "ta".
 - Escribe y borra rápidamente → no se producen filtrados innecesarios (debounce).
 - Verifica en la consola de Xcode que no hay warnings ni errores.
 
@@ -744,12 +733,12 @@ final class SyncStatusViewModel: ObservableObject {
     private func performSync() {
         syncStatus = .syncing
 
-        // Simular llamada de red usando TaskNetworkService existente
+        // Comprobar la conexión con el TaskNetworkService del Lab 04.
+        // (La importación de tareas la sigue haciendo SyncViewModel.)
         Task { [weak self] in
             do {
-                // Usa tu TaskNetworkService del Lab 04
-                // let remoteTasks = try await TaskNetworkService.shared.fetchTasks()
-                // Procesar y mergear con datos locales...
+                let remoteTasks = try await TaskNetworkService().fetchRemoteTasks()
+                print("🔄 Servidor disponible: \(remoteTasks.count) tareas remotas")
 
                 await MainActor.run {
                     self?.localPendingCountSubject.send(0)
@@ -841,18 +830,26 @@ struct SyncBannerView: View {
 }
 ```
 
-3. Integra el banner en `TaskListView` añadiendo justo encima de la `List`:
+3. Integra el banner en `SwiftDataTaskListView`:
+
+   a. Declara el ViewModel junto a las demás propiedades de la vista (no dentro de `body`):
 
 ```swift
-// Dentro del NavigationStack de TaskListView, antes de List:
 @StateObject private var syncVM = SyncStatusViewModel()
+```
 
-// En el body, justo antes de List {...}:
-VStack(spacing: 0) {
-    SyncBannerView(viewModel: syncVM)
+   b. En `taskListContent`, el `VStack(spacing: 0)` del Lab 04 ya contiene los banners de carga y de éxito. Añade el banner como primer elemento de ese `VStack`, antes de los demás:
 
-    List {
-        // ... contenido existente de la lista ...
+```swift
+private var taskListContent: some View {
+    VStack(spacing: 0) {
+        SyncBannerView(viewModel: syncVM)   // 🆕 NUEVO
+
+        // ... banners de carga y éxito del Lab 04 ...
+
+        List {
+            // ... ForEach(displayedTasks) del Paso 3 ...
+        }
     }
 }
 ```
@@ -873,7 +870,7 @@ Un banner compacto aparece en la parte superior de la lista de tareas mostrando 
 ### Verificación
 
 - El banner muestra "Listo" al iniciar.
-- Si llamas `syncVM.updateNetworkStatus(isOnline: false)` desde un botón de prueba, el banner cambia a "Sin conexión" con icono de wifi tachado.
+- Si llamas `syncVM.updateNetworkStatus(isOnline: false)` desde un botón de prueba temporal, el banner cambia a "Sin conexión" con icono de wifi tachado.
 - El pipeline `combineLatest` actualiza el estado automáticamente cuando cambia cualquiera de los dos subjects.
 
 ---
@@ -884,76 +881,82 @@ Un banner compacto aparece en la parte superior de la lista de tareas mostrando 
 
 ### Instrucciones
 
-1. **Actualizar `TaskNetworkService`** (del Lab 04) para lanzar `AppError`:
+1. **Conectar `NetworkError` (Lab 04) con `AppError`.** `TaskNetworkService` sigue lanzando `NetworkError`: así no se rompen los `catch let error as NetworkError` de `SyncViewModel` ni de la extensión UIKit del Lab 04. Lo que se agrega es la traducción a `AppError`, para que todos los errores lleguen tipados al `ErrorHandler`. Crea `NetworkError+AppError.swift` en `Services/Network`:
 
 ```swift
-// TaskNetworkService.swift (actualización parcial)
-// Reemplazar los errores genéricos con AppError
+// NetworkError+AppError.swift
+// TaskManagerApp
 
-func fetchTasks() async throws -> [TaskDTO] {
-    guard let url = URL(string: "\(baseURL)/todos?_limit=20") else {
-        throw AppError.invalidURL("\(baseURL)/todos?_limit=20")
-    }
+import Foundation
 
-    let (data, response): (Data, URLResponse)
-    do {
-        (data, response) = try await URLSession.shared.data(from: url)
-    } catch let urlError as URLError {
-        throw ErrorHandler.shared.mapToAppError(urlError)
-    } catch {
-        throw AppError.unknown(error.localizedDescription)
-    }
-
-    guard let httpResponse = response as? HTTPURLResponse else {
-        throw AppError.unknown("Respuesta no HTTP")
-    }
-
-    guard (200...299).contains(httpResponse.statusCode) else {
-        throw AppError.serverError(statusCode: httpResponse.statusCode)
-    }
-
-    do {
-        return try JSONDecoder().decode([TaskDTO].self, from: data)
-    } catch {
-        throw AppError.decodingFailed(error.localizedDescription)
+extension NetworkError {
+    /// Traduce el error de red del Lab 04 al error unificado de la app.
+    var asAppError: AppError {
+        switch self {
+        case .invalidURL:
+            return .invalidURL("https://jsonplaceholder.typicode.com/todos")
+        case .noData:
+            return .unknown("El servidor no devolvió datos.")
+        case .decodingError(let detail):
+            return .decodingFailed(detail)
+        case .serverError(let code):
+            return .serverError(statusCode: code)
+        case .networkUnavailable:
+            return .networkUnavailable
+        }
     }
 }
 ```
 
-> **Nota:** Adapta este patrón a todos los métodos de red que tengas (`postTask`, etc.). La clave es que cada `catch` genérico se convierta en un `AppError` específico.
-
-2. **Actualizar el repositorio SwiftData** para propagar `AppError`:
+   Después, en `ErrorHandler.mapToAppError(_:)` (Paso 1), agrega este caso justo después del `if let appError = error as? AppError`:
 
 ```swift
-// En tu repositorio de SwiftData (ej. SwiftDataTaskRepository)
-func save(_ task: TaskItem) throws {
+if let networkError = error as? NetworkError {
+    return networkError.asAppError
+}
+```
+
+> **Nota:** No llames a `ErrorHandler.shared.handle(_:)` desde `SyncViewModel`: ese ViewModel ya muestra su propia alerta "Error de Sincronización" (Lab 04), y SwiftUI no puede presentar dos alertas a la vez sobre la misma vista. `asAppError` y `mapToAppError` quedan disponibles para el código nuevo, como `SyncStatusViewModel` (Paso 4), que ya usa `mapToAppError`.
+
+2. **Registrar los errores del repositorio SwiftData.** El protocolo `TaskRepository` (Lab 02) no usa `throws`, y lo implementan tres repositorios y varias vistas; cambiarlo obligaría a modificar todo el proyecto. Por eso `SwiftDataTaskRepository` (Lab 03) no propaga el error: lo convierte en `AppError` y lo envía al `ErrorHandler`. Reemplaza estos dos métodos privados:
+
+```swift
+// SwiftDataTaskRepository.swift (Lab 03), métodos privados
+private func findItem(id: UUID) -> SDTaskItem? {
+    let targetID: UUID = id
+    let descriptor = FetchDescriptor<SDTaskItem>(
+        predicate: #Predicate { $0.id == targetID }
+    )
     do {
-        modelContext.insert(task)
+        return try modelContext.fetch(descriptor).first
+    } catch {
+        ErrorHandler.shared.handle(.fetchFailed(error.localizedDescription))
+        return nil
+    }
+}
+
+private func saveContext() {
+    do {
         try modelContext.save()
     } catch {
-        throw AppError.saveFailed(error.localizedDescription)
-    }
-}
-
-func fetchAll() throws -> [TaskItem] {
-    do {
-        let descriptor = FetchDescriptor<TaskItem>(
-            sortBy: [SortDescriptor(\.createdAt, order: .reverse)]
-        )
-        return try modelContext.fetch(descriptor)
-    } catch {
-        throw AppError.fetchFailed(error.localizedDescription)
+        ErrorHandler.shared.handle(.saveFailed(error.localizedDescription))
     }
 }
 ```
 
-3. **Integrar alertas centralizadas** en la vista raíz de la app. Modifica tu `ContentView` o `TaskManagerAppApp.swift`:
+   En `fetchAll()`, cambia el `print` del `catch` por:
 
 ```swift
-// En la vista raíz principal
+ErrorHandler.shared.handle(.fetchFailed(error.localizedDescription))
+```
+
+3. **Integrar alertas centralizadas.** El proyecto no tiene una vista raíz de SwiftUI: arranca en UIKit (`AppDelegate` del Lab 01) y las pantallas SwiftUI se abren con `UIHostingController`. Agrega la alerta del `ErrorHandler` a `SwiftDataTaskListView` (y, si quieres, también a `TaskListView` del Lab 02):
+
+```swift
+// Propiedad de la vista
 @ObservedObject private var errorHandler = ErrorHandler.shared
 
-// Añadir este modificador al contenedor principal:
+// Modificador junto a los demás (.searchable, .onAppear, ...):
 .alert(
     "Error",
     isPresented: $errorHandler.showErrorAlert,
@@ -992,11 +995,11 @@ git commit -m "refactor: replace all force-unwraps and generic catches with type
 
 ### Resultado Esperado
 
-Toda la cadena de errores fluye de forma tipada: `Repository throws AppError` → `Service throws AppError` → `ViewModel catches AppError` → `ErrorHandler presenta alerta`. No quedan `try!` ni force-unwraps en el código.
+Toda la cadena de errores termina tipada en el `ErrorHandler`: `TaskNetworkService` lanza `NetworkError` → `SyncViewModel` lo muestra en su alerta y `mapToAppError` lo traduce a `AppError` para el código nuevo; el repositorio SwiftData convierte sus fallos en `AppError.saveFailed` / `.fetchFailed`; el `ErrorHandler` los registra con `os.log` y presenta la alerta. No quedan `try!` ni force-unwraps en el código.
 
 ### Verificación
 
-- Desconecta la red → la app muestra alerta con "No hay conexión a Internet disponible."
+- Desconecta la red y pulsa **Sincronizar** → aparece la alerta "Error de Sincronización" del Lab 04 con "No hay conexión a Internet disponible."
 - Intenta guardar una tarea con título vacío → la validación previene el guardado y muestra mensaje inline.
 - Revisa la consola de Xcode → los errores se loguean con `os.log` indicando archivo y línea.
 
@@ -1042,7 +1045,7 @@ final class LeakDemoViewModel: ObservableObject {
 2. Añade temporalmente una referencia en alguna vista para que se instancie:
 
 ```swift
-// En TaskListView, añadir temporalmente:
+// En SwiftDataTaskListView, añadir temporalmente:
 @StateObject private var leakDemo = LeakDemoViewModel()
 
 // Y en el body, añadir en algún lugar visible:
@@ -1111,7 +1114,7 @@ init() {
 
    d. Toma captura de los hallazgos.
 
-8. **Eliminar el código de demostración** del leak (quita `@StateObject private var leakDemo` y el `Text` temporal de `TaskListView`). Sin embargo, **conserva** `LeakDemoViewModel.swift` con la versión corregida como referencia educativa.
+8. **Eliminar el código de demostración** del leak (quita `@StateObject private var leakDemo` y el `Text` temporal de `SwiftDataTaskListView`). Sin embargo, **conserva** `LeakDemoViewModel.swift` con la versión corregida como referencia educativa.
 
 9. Guarda las capturas de pantalla en una carpeta `docs/instruments/` en el proyecto:
 
@@ -1163,7 +1166,7 @@ La aplicación sigue una arquitectura MVVM con las siguientes capas:
 ```
 ┌─────────────────────────────────────────┐
 │              Vistas (SwiftUI)           │
-│  TaskListView · AddTaskView · Search    │
+│  TaskListView · SwiftDataTaskListView   │
 ├─────────────────────────────────────────┤
 │            ViewModels (Combine)         │
 │  SearchVM · AddTaskVM · SyncStatusVM    │
@@ -1171,8 +1174,8 @@ La aplicación sigue una arquitectura MVVM con las siguientes capas:
 │         Servicios / Repositorios        │
 │  TaskNetworkService · SwiftDataRepo     │
 ├─────────────────────────────────────────┤
-│           Modelos (SwiftData)           │
-│  TaskItem · TaskDTO · AppError          │
+│               Modelos                   │
+│  TaskItem · SDTaskItem · RemoteTask     │
 └─────────────────────────────────────────┘
 ```
 
@@ -1200,9 +1203,9 @@ La aplicación sigue una arquitectura MVVM con las siguientes capas:
 - **Corrección:** Pipeline Combine con `.debounce(for: .milliseconds(300))`.
 - **Evidencia:** ![Time Profiler](docs/instruments/time-profiler.png)
 
-### Hallazgo 3: Re-renders de SwiftUI en TaskListView
+### Hallazgo 3: Re-renders de SwiftUI en SwiftDataTaskListView
 - **Instrumento:** SwiftUI Instrument
-- **Síntoma:** El body de `TaskListView` se re-evaluaba en cada cambio de `searchText`.
+- **Síntoma:** El body de `SwiftDataTaskListView` se re-evaluaba en cada cambio de `searchText`.
 - **Causa:** `@StateObject` del `SearchViewModel` provocaba actualizaciones.
 - **Corrección:** Uso de `displayedTasks` computed property para minimizar cambios.
 - **Evidencia:** ![SwiftUI Instrument](docs/instruments/swiftui-renders.png)
@@ -1342,7 +1345,7 @@ Ejecuta esta lista de verificación completa antes de considerar el lab terminad
 | 2 | Proyecto compila sin warnings | Revisar Issue Navigator (⌘5) | ☐ |
 | 3 | Búsqueda filtra tareas en tiempo real | Escribir en barra de búsqueda | ☐ |
 | 4 | Debounce funciona (no filtra al escribir rápido) | Escribir y borrar rápidamente | ☐ |
-| 5 | Banner de sincronización visible | Verificar en TaskListView | ☐ |
+| 5 | Banner de sincronización visible | Verificar en SwiftDataTaskListView | ☐ |
 | 6 | Validación de formulario funciona | Probar título vacío, largo, válido | ☐ |
 | 7 | Alertas de error aparecen | Provocar error de red | ☐ |
 | 8 | No hay `try!` en el código | `grep -rn 'try!' --include="*.swift"` | ☐ |
@@ -1431,6 +1434,23 @@ git branch -a
 
 ---
 
+## Reto Opcional (KMP) — Buscador Compartido con StateFlow
+
+> Este reto es **opcional** y no forma parte de la evaluación. Se trabaja sobre el proyecto KMP de los labs anteriores.
+
+**Objetivo:** Mover la lógica del buscador al módulo `shared` con `StateFlow` y `debounce`, y consumirla desde SwiftUI.
+
+**Instrucciones:**
+
+1. En `commonMain`, crea `BuscadorViewModel` con un `MutableStateFlow` para el texto de búsqueda.
+2. Expón los resultados como `StateFlow<List<Tarea>>` aplicando `debounce(300)` y `map` sobre el texto, y conviértelos con `stateIn`.
+3. Agrega el plugin **SKIE** (de Touchlab) al módulo `shared` para que Swift vea los `Flow` de Kotlin como `AsyncSequence`.
+4. En SwiftUI, recorre los resultados con `for await` dentro de `.task { }` y actualiza la lista.
+
+**Resultado esperado:** la búsqueda se filtra mientras el usuario escribe, la lógica vive en el módulo `shared` y SwiftUI recibe los resultados con `for await`.
+
+---
+
 ## Resumen
 
 En este laboratorio de cierre completaste el ciclo de desarrollo profesional del proyecto **TaskManagerApp**:
@@ -1447,7 +1467,7 @@ En este laboratorio de cierre completaste el ciclo de desarrollo profesional del
 - **Publisher/Subscriber**: `@Published`, `CurrentValueSubject`, `PassthroughSubject` como puentes entre código imperativo y reactivo.
 - **Operadores Combine**: `debounce`, `removeDuplicates`, `map`, `combineLatest`, `filter`, `handleEvents`, `receive(on:)`.
 - **Gestión de memoria**: `AnyCancellable` + `store(in:)` para retener suscripciones; `[weak self]` en closures para evitar retain cycles.
-- **Errores tipados**: `Result<T, AppError>` para validación; `throws` con `AppError` en capas de servicio; `do/catch` exhaustivo en ViewModels.
+- **Errores tipados**: `Result<T, AppError>` para validación; `NetworkError` traducido a `AppError` con `asAppError`; errores del repositorio enviados al `ErrorHandler`; `do/catch` exhaustivo en ViewModels.
 - **Profiling**: Instruments como herramienta esencial del ciclo de desarrollo, no solo de debugging.
 
 ### Recursos Adicionales
@@ -1457,3 +1477,28 @@ En este laboratorio de cierre completaste el ciclo de desarrollo profesional del
 - [Instruments Help (Apple)](https://help.apple.com/instruments/mac/current/)
 - [Swift Error Handling (Swift.org)](https://docs.swift.org/swift-book/documentation/the-swift-programming-language/errorhandling/)
 - [WWDC23: Analyze hangs with Instruments](https://developer.apple.com/videos/play/wwdc2023/10248/)
+
+---
+
+## Anexo — Notas sobre la presentación (diapositiva 345, «Práctica incremental» del Capítulo 5)
+
+Los criterios de la diapositiva 345 siguen siendo válidos para este README. Las notas de abajo aclaran **cómo** se cumple cada uno en el proyecto de los Labs 01–04, para que la diapositiva y la guía no se lean como si pidieran cosas distintas. Mientras la diapositiva no se actualice, **manda el código de este README**.
+
+| Criterio en la diapositiva 345 | Cómo se cumple en este README | Por qué |
+|---|---|---|
+| **Errores tipados:** `AppError` con `LocalizedError` y `TaskValidator` con `Result<T, AppError>` | Sin cambios. `TaskValidator` devuelve `Result<ValidatedTaskData, AppError>`. | — |
+| *(implícito)* Formulario con validación | `AddTaskView` **conserva su firma** `AddTaskView(repository:onSave:)` y guarda un `TaskItem` con `repository.add(_:)` (Paso 2). | La usan `TaskListView` (Lab 02) y `SwiftDataTaskListView` (Lab 04); si cambiara la firma, esas vistas no compilarían. |
+| **Combine:** `SearchViewModel` con `debounce`, `removeDuplicates` y `map` | La búsqueda se agrega a **`SwiftDataTaskListView`** con cambios puntuales, sin reemplazar el archivo (Paso 3). | Conserva el botón de sincronización, la alerta y los banners del Lab 04. `@Query` necesita el contenedor que esa vista ya recibe. |
+| **Combine:** `SyncStatusViewModel` con `combineLatest` | El banner se agrega dentro del `VStack` de `SwiftDataTaskListView`. `performSync()` llama a `TaskNetworkService().fetchRemoteTasks()` (Paso 4). | `fetchTasks()` y `TaskNetworkService.shared` no existen; el método del Lab 04 es `fetchRemoteTasks()`. |
+| **Auditoría:** `ErrorHandler` registra los errores con `os.log` | `TaskNetworkService` **sigue lanzando `NetworkError`**; `NetworkError.asAppError` lo traduce a `AppError` y `mapToAppError(_:)` lo reconoce (Paso 5.1). | Así no se rompen los `catch let error as NetworkError` del Lab 04. |
+| **Auditoría:** errores del repositorio | `SwiftDataTaskRepository` **no propaga** errores. Convierte sus fallos en `AppError.saveFailed` / `.fetchFailed` y los envía al `ErrorHandler` (Paso 5.2). | El protocolo `TaskRepository` (Lab 02) no usa `throws`. Cambiarlo obligaría a modificar tres repositorios y varias vistas. |
+| *(implícito)* Alerta centralizada | La alerta del `ErrorHandler` va en `SwiftDataTaskListView` (y, si se quiere, en `TaskListView`) (Paso 5.3). | El proyecto arranca en UIKit (`AppDelegate`, Lab 01) y no tiene `ContentView` ni un `App` de SwiftUI. |
+| *(implícito)* Errores de sincronización | `SyncViewModel` mantiene su propia alerta "Error de Sincronización" y **no** llama a `ErrorHandler.handle(_:)`. | SwiftUI no puede presentar dos alertas a la vez sobre la misma vista. |
+| **Instruments:** Time Profiler, Leaks, `[weak self]` y 3 hallazgos en `README.md` | Sin cambios. La demostración del leak se coloca en `SwiftDataTaskListView`. En el diagrama de arquitectura, `TaskDTO` pasa a ser `RemoteTask`. | `TaskDTO` no existe en el proyecto. |
+| **Cierre:** merge de `develop` a `main` y tag `v1.0.0` | Sin cambios (Paso 8). | — |
+
+**Texto sugerido para el criterio de "Auditoría" en la diapositiva** (si se decide actualizarla):
+
+> **Auditoría:** sin force-unwraps ni catch vacíos; `NetworkError` se traduce a `AppError` y `ErrorHandler` registra con `os.log` los errores de validación y del repositorio.
+
+**Resultados esperados (diapositiva 346):** siguen siendo válidos. Al probarlos, ten en cuenta que la búsqueda y el banner de sincronización están en la pantalla **SwiftData**, a la que se llega desde la lista UIKit.

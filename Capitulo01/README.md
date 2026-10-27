@@ -10,7 +10,7 @@
 
 ## Descripción General
 
-En este laboratorio fundacional crearás desde cero el proyecto Xcode **TaskManagerApp** que servirá como base incremental para todos los módulos del curso. Configurarás la estructura de carpetas estándar, explorarás los archivos generados por Xcode para comprender el ciclo de vida de la app (AppDelegate/SceneDelegate), inicializarás un repositorio Git con flujo profesional hacia GitHub, e implementarás el modelo de datos inicial en Swift puro (`Task`, protocolo `TaskRepository`) aplicando sintaxis Swift 5.10 con closures, structs, protocolos y control de flujo. Finalizarás usando breakpoints y el debugger de Xcode para inspeccionar el ciclo de vida en el simulador iPhone 15 Pro.
+En este laboratorio fundacional crearás desde cero el proyecto Xcode **TaskManagerApp** que servirá como base incremental para todos los módulos del curso. Configurarás la estructura de carpetas estándar, explorarás los archivos generados por Xcode para comprender el ciclo de vida de la app (AppDelegate/SceneDelegate), inicializarás un repositorio Git con flujo profesional hacia GitHub, e implementarás el modelo de datos inicial en Swift puro (`TaskItem`, protocolo `TaskRepository`) aplicando sintaxis Swift 5.10 con closures, structs, protocolos y control de flujo. Finalizarás usando breakpoints y el debugger de Xcode para inspeccionar el ciclo de vida en el simulador iPhone 15 Pro.
 
 ---
 
@@ -21,7 +21,7 @@ Al completar este laboratorio serás capaz de:
 - [ ] Crear y configurar un proyecto Xcode 15.4 (UIKit, Storyboard, iOS 17.0) con la estructura de carpetas estándar del curso en `~/Developer/TaskManagerApp`.
 - [ ] Explicar el rol de `AppDelegate.swift`, `SceneDelegate.swift`, `Info.plist` y `Assets.xcassets` dentro de la arquitectura en capas de iOS y el ciclo de vida de la aplicación.
 - [ ] Configurar un repositorio Git local con `.gitignore` apropiado, crear ramas `main`/`develop` y realizar push al repositorio remoto `task-manager-ios` en GitHub.
-- [ ] Implementar el struct `Task`, el protocolo `TaskRepository` y funciones de filtrado con closures aplicando sintaxis Swift 5.10 (opcionales, `guard`, `switch`, parámetros etiquetados).
+- [ ] Implementar el struct `TaskItem`, el protocolo `TaskRepository` y funciones de filtrado con closures aplicando sintaxis Swift 5.10 (opcionales, `guard`, `switch`, parámetros etiquetados).
 - [ ] Utilizar breakpoints, la consola LLDB y la vista de variables en Xcode para inspeccionar el ciclo de vida y depurar el modelo de datos en el simulador iPhone 15 Pro (iOS 17.5).
 
 ---
@@ -505,9 +505,11 @@ origin  git@github.com:estudiante-unam/task-manager-ios.git (push)
 
 ---
 
-### Paso 5 — Implementar el Modelo de Datos Task
+### Paso 5 — Implementar el Modelo de Datos TaskItem
 
-**Objetivo:** Crear el struct `Task` con propiedades tipadas, un enum `Priority`, y aplicar sintaxis Swift 5.10 incluyendo opcionales, inicializadores y conformancia a protocolos estándar.
+> **Nota:** En este curso el modelo se llama `TaskItem` (y no `Task`) para evitar el conflicto con `Swift.Task`, el tipo de Swift Concurrency que usarás en el Lab 04.
+
+**Objetivo:** Crear el struct `TaskItem` con propiedades tipadas, un enum `Priority`, y aplicar sintaxis Swift 5.10 incluyendo opcionales, inicializadores y conformancia a protocolos estándar.
 
 **Instrucciones:**
 
@@ -515,13 +517,13 @@ origin  git@github.com:estudiante-unam/task-manager-ios.git (push)
 
 2. Selecciona **New File…** → **Swift File** → **Next**.
 
-3. Nombra el archivo `Task.swift` y asegúrate de que el target `TaskManagerApp` esté marcado. Haz clic en **Create**.
+3. Nombra el archivo `TaskItem.swift` y asegúrate de que el target `TaskManagerApp` esté marcado. Haz clic en **Create**.
 
-4. Reemplaza el contenido de `Task.swift` con el siguiente código:
+4. Reemplaza el contenido de `TaskItem.swift` con el siguiente código:
 
    ```swift
    //
-   //  Task.swift
+   //  TaskItem.swift
    //  TaskManagerApp
    //
    //  Laboratorio 01-00-01: Modelo de datos inicial
@@ -563,11 +565,11 @@ origin  git@github.com:estudiante-unam/task-manager-ios.git (push)
        }
    }
 
-   // MARK: - Task Struct
+   // MARK: - TaskItem Struct
 
    /// Modelo principal de tarea para TaskManagerApp.
    /// Usa `struct` (tipo por valor) siguiendo las mejores prácticas de Swift.
-   struct Task: Identifiable, CustomStringConvertible {
+   struct TaskItem: Identifiable, CustomStringConvertible {
 
        // MARK: Properties
 
@@ -634,7 +636,7 @@ origin  git@github.com:estudiante-unam/task-manager-ios.git (push)
 
        /// Retorna una copia de la tarea con el estado de completitud invertido.
        /// Usa el patrón de inmutabilidad de structs en Swift.
-       func toggleCompleted() -> Task {
+       func toggleCompleted() -> TaskItem {
            var copy = self
            copy.isCompleted = !copy.isCompleted
            return copy
@@ -647,12 +649,12 @@ origin  git@github.com:estudiante-unam/task-manager-ios.git (push)
 **Salida esperada:**
 
 - Build Succeeded.
-- El archivo `Task.swift` aparece dentro de la carpeta `Models/` en el Project Navigator.
+- El archivo `TaskItem.swift` aparece dentro de la carpeta `Models/` en el Project Navigator.
 
 **Verificación:**
 
 - [ ] El proyecto compila sin errores.
-- [ ] El struct `Task` tiene 7 propiedades (id, title, taskDescription, isCompleted, priority, createdAt, dueDate).
+- [ ] El struct `TaskItem` tiene 7 propiedades (id, title, taskDescription, isCompleted, priority, createdAt, dueDate).
 - [ ] El enum `Priority` tiene 4 casos y conforma a `Int`, `CaseIterable` y `CustomStringConvertible`.
 
 ---
@@ -684,22 +686,22 @@ origin  git@github.com:estudiante-unam/task-manager-ios.git (push)
    protocol TaskRepository {
 
        /// Retorna todas las tareas almacenadas.
-       func fetchAll() -> [Task]
+       func fetchAll() -> [TaskItem]
 
        /// Busca una tarea por su identificador único.
        /// - Parameter id: UUID de la tarea a buscar.
        /// - Returns: La tarea si existe, `nil` en caso contrario.
-       func fetchById(_ id: UUID) -> Task?
+       func fetchById(_ id: UUID) -> TaskItem?
 
        /// Agrega una nueva tarea al repositorio.
        /// - Parameter task: La tarea a agregar.
-       mutating func add(_ task: Task)
+       mutating func add(_ task: TaskItem)
 
        /// Actualiza una tarea existente.
        /// - Parameter task: La tarea con los datos actualizados (se identifica por `id`).
        /// - Returns: `true` si la tarea fue encontrada y actualizada, `false` en caso contrario.
        @discardableResult
-       mutating func update(_ task: Task) -> Bool
+       mutating func update(_ task: TaskItem) -> Bool
 
        /// Elimina una tarea por su identificador.
        /// - Parameter id: UUID de la tarea a eliminar.
@@ -708,9 +710,9 @@ origin  git@github.com:estudiante-unam/task-manager-ios.git (push)
        mutating func delete(byId id: UUID) -> Bool
 
        /// Filtra tareas usando un closure como predicado.
-       /// - Parameter predicate: Closure que recibe una `Task` y retorna `Bool`.
+       /// - Parameter predicate: Closure que recibe una `TaskItem` y retorna `Bool`.
        /// - Returns: Array de tareas que cumplen el predicado.
-       func filter(where predicate: (Task) -> Bool) -> [Task]
+       func filter(where predicate: (TaskItem) -> Bool) -> [TaskItem]
    }
 
    // MARK: - InMemoryTaskRepository
@@ -721,7 +723,7 @@ origin  git@github.com:estudiante-unam/task-manager-ios.git (push)
 
        // MARK: Properties
 
-       private var tasks: [Task] = []
+       private var tasks: [TaskItem] = []
 
        /// Número de tareas almacenadas.
        var count: Int {
@@ -730,21 +732,21 @@ origin  git@github.com:estudiante-unam/task-manager-ios.git (push)
 
        // MARK: TaskRepository Conformance
 
-       func fetchAll() -> [Task] {
+       func fetchAll() -> [TaskItem] {
            return tasks
        }
 
-       func fetchById(_ id: UUID) -> Task? {
+       func fetchById(_ id: UUID) -> TaskItem? {
            return tasks.first { $0.id == id }
        }
 
-       mutating func add(_ task: Task) {
+       mutating func add(_ task: TaskItem) {
            tasks.append(task)
            print("📝 Tarea agregada: \(task.title) | Total: \(tasks.count)")
        }
 
        @discardableResult
-       mutating func update(_ task: Task) -> Bool {
+       mutating func update(_ task: TaskItem) -> Bool {
            guard let index = tasks.firstIndex(where: { $0.id == task.id }) else {
                print("⚠️ Tarea no encontrada para actualizar: \(task.id)")
                return false
@@ -765,35 +767,35 @@ origin  git@github.com:estudiante-unam/task-manager-ios.git (push)
            return true
        }
 
-       func filter(where predicate: (Task) -> Bool) -> [Task] {
+       func filter(where predicate: (TaskItem) -> Bool) -> [TaskItem] {
            return tasks.filter(predicate)
        }
 
        // MARK: Convenience Methods
 
        /// Retorna tareas pendientes (no completadas).
-       func pendingTasks() -> [Task] {
+       func pendingTasks() -> [TaskItem] {
            return filter { !$0.isCompleted }
        }
 
        /// Retorna tareas completadas.
-       func completedTasks() -> [Task] {
+       func completedTasks() -> [TaskItem] {
            return filter { $0.isCompleted }
        }
 
        /// Retorna tareas filtradas por prioridad.
        /// - Parameter priority: Nivel de prioridad a filtrar.
-       func tasks(withPriority priority: Priority) -> [Task] {
+       func tasks(withPriority priority: Priority) -> [TaskItem] {
            return filter { $0.priority == priority }
        }
 
        /// Retorna tareas ordenadas por prioridad (de mayor a menor).
-       func tasksSortedByPriority() -> [Task] {
+       func tasksSortedByPriority() -> [TaskItem] {
            return tasks.sorted { $0.priority.rawValue > $1.priority.rawValue }
        }
 
        /// Retorna tareas vencidas.
-       func overdueTasks() -> [Task] {
+       func overdueTasks() -> [TaskItem] {
            return filter { $0.isOverdue() }
        }
    }
@@ -858,7 +860,7 @@ origin  git@github.com:estudiante-unam/task-manager-ios.git (push)
            print("--- Test 1: Creación de Tasks ---")
 
            // Tarea con valores por defecto
-           let task1 = Task(title: "Estudiar Swift")
+           let task1 = TaskItem(title: "Estudiar Swift")
            print("Tarea 1: \(task1)")
            print("  ID: \(task1.id)")
            print("  Completada: \(task1.isCompleted)")
@@ -866,7 +868,7 @@ origin  git@github.com:estudiante-unam/task-manager-ios.git (push)
 
            // Tarea con todos los parámetros
            let tomorrow = Calendar.current.date(byAdding: .day, value: 1, to: Date())!
-           let task2 = Task(
+           let task2 = TaskItem(
                title: "Entregar laboratorio",
                taskDescription: "Lab 01-00-01 del curso iOS",
                isCompleted: false,
@@ -878,7 +880,7 @@ origin  git@github.com:estudiante-unam/task-manager-ios.git (push)
 
            // Tarea vencida (fecha en el pasado)
            let yesterday = Calendar.current.date(byAdding: .day, value: -1, to: Date())!
-           let task3 = Task(
+           let task3 = TaskItem(
                title: "Tarea vencida de ejemplo",
                priority: .critical,
                dueDate: yesterday
@@ -900,11 +902,11 @@ origin  git@github.com:estudiante-unam/task-manager-ios.git (push)
            var repo = InMemoryTaskRepository()
 
            // CREATE
-           let task1 = Task(title: "Configurar Xcode", priority: .high)
-           let task2 = Task(title: "Crear .gitignore", priority: .medium)
-           let task3 = Task(title: "Implementar modelo Task", priority: .high)
-           let task4 = Task(title: "Revisar documentación", priority: .low)
-           let task5 = Task(
+           let task1 = TaskItem(title: "Configurar Xcode", priority: .high)
+           let task2 = TaskItem(title: "Crear .gitignore", priority: .medium)
+           let task3 = TaskItem(title: "Implementar modelo TaskItem", priority: .high)
+           let task4 = TaskItem(title: "Revisar documentación", priority: .low)
+           let task5 = TaskItem(
                title: "Entregar proyecto",
                priority: .critical,
                dueDate: Calendar.current.date(byAdding: .day, value: 3, to: Date())
@@ -947,14 +949,14 @@ origin  git@github.com:estudiante-unam/task-manager-ios.git (push)
 
            var repo = InMemoryTaskRepository()
 
-           repo.add(Task(title: "Tarea baja completada", isCompleted: true, priority: .low))
-           repo.add(Task(title: "Tarea media pendiente", priority: .medium))
-           repo.add(Task(title: "Tarea alta pendiente", priority: .high))
-           repo.add(Task(title: "Tarea crítica completada", isCompleted: true, priority: .critical))
-           repo.add(Task(title: "Tarea alta completada", isCompleted: true, priority: .high))
+           repo.add(TaskItem(title: "Tarea baja completada", isCompleted: true, priority: .low))
+           repo.add(TaskItem(title: "Tarea media pendiente", priority: .medium))
+           repo.add(TaskItem(title: "Tarea alta pendiente", priority: .high))
+           repo.add(TaskItem(title: "Tarea crítica completada", isCompleted: true, priority: .critical))
+           repo.add(TaskItem(title: "Tarea alta completada", isCompleted: true, priority: .high))
 
            // Filtrado con closure explícito
-           let pending = repo.filter(where: { (task: Task) -> Bool in
+           let pending = repo.filter(where: { (task: TaskItem) -> Bool in
                return !task.isCompleted
            })
            print("\nPendientes (closure explícito): \(pending.count)")
@@ -1031,7 +1033,7 @@ Toggle completitud:
 --- Test 2: Repositorio CRUD ---
 📝 Tarea agregada: Configurar Xcode | Total: 1
 📝 Tarea agregada: Crear .gitignore | Total: 2
-📝 Tarea agregada: Implementar modelo Task | Total: 3
+📝 Tarea agregada: Implementar modelo TaskItem | Total: 3
 📝 Tarea agregada: Revisar documentación | Total: 4
 📝 Tarea agregada: Entregar proyecto | Total: 5
 
@@ -1146,9 +1148,9 @@ Total de tareas: 5
 
    ```bash
    git add .
-   git commit -m "feat: modelo de datos Task, protocolo TaskRepository e InMemoryTaskRepository
+   git commit -m "feat: modelo de datos TaskItem, protocolo TaskRepository e InMemoryTaskRepository
 
-   - Struct Task con propiedades tipadas, opcionales y métodos (isOverdue, toggleCompleted)
+   - Struct TaskItem con propiedades tipadas, opcionales y métodos (isOverdue, toggleCompleted)
    - Enum Priority con CaseIterable, CustomStringConvertible y rawValue Int
    - Protocolo TaskRepository con operaciones CRUD y filtrado con closures
    - InMemoryTaskRepository con métodos de conveniencia (pendingTasks, completedTasks, etc.)
@@ -1171,7 +1173,7 @@ Total de tareas: 5
 **Salida esperada:**
 
 ```
-* a1b2c3d (HEAD -> develop, origin/develop) feat: modelo de datos Task, protocolo TaskRepository e InMemoryTaskRepository
+* a1b2c3d (HEAD -> develop, origin/develop) feat: modelo de datos TaskItem, protocolo TaskRepository e InMemoryTaskRepository
 * 1a2b3c4 (origin/main, main) feat: proyecto base TaskManagerApp con estructura de carpetas estándar
 ```
 
@@ -1180,6 +1182,23 @@ Total de tareas: 5
 - [ ] `git log` muestra 2 commits en `develop` y 1 en `main`.
 - [ ] Los cambios son visibles en GitHub en la rama `develop`.
 - [ ] `git status` muestra "nothing to commit, working tree clean".
+
+---
+
+## Reto Opcional (KMP) — Saludo desde el Módulo Compartido
+
+> Este reto es **opcional** y no forma parte de la evaluación. Requiere **Android Studio** con el plugin **Kotlin Multiplatform**, además de Xcode.
+
+**Objetivo:** Crear un proyecto Kotlin Multiplatform y mostrar en la app iOS un texto generado por el módulo `shared`.
+
+**Instrucciones:**
+
+1. En Android Studio, crea un proyecto con el asistente **Kotlin Multiplatform** y marca los destinos Android e iOS.
+2. Revisa la estructura generada: `shared/src/commonMain` (código común), `androidApp` e `iosApp`.
+3. Abre `iosApp/iosApp.xcodeproj` en Xcode y ejecuta la app en el simulador iPhone 15 Pro.
+4. En la vista principal de `iosApp`, importa el framework con `import Shared` y muestra el resultado de `Greeting().greet()`.
+
+**Resultado esperado:** la app iOS muestra el saludo que devuelve la clase `Greeting` del módulo `shared`, lo que confirma que el código Kotlin se usa desde Swift.
 
 ---
 
@@ -1193,7 +1212,7 @@ En este laboratorio has completado las siguientes actividades:
 | 2 | Exploración del ciclo de vida | AppDelegate y SceneDelegate instrumentados con `print()` |
 | 3 | Estructura de carpetas | Models, Views, Controllers, Services, Resources, Utilities |
 | 4 | Configuración de Git | Repositorio local + remoto con ramas `main`/`develop` |
-| 5 | Modelo de datos | Struct `Task` + Enum `Priority` con sintaxis Swift 5.10 |
+| 5 | Modelo de datos | Struct `TaskItem` + Enum `Priority` con sintaxis Swift 5.10 |
 | 6 | Protocolo y repositorio | `TaskRepository` + `InMemoryTaskRepository` con closures |
 | 7 | Pruebas en consola | CRUD, filtrado y validación del modelo en ViewController |
 | 8 | Depuración | Breakpoints, LLDB y vista de variables en Xcode |
@@ -1209,7 +1228,7 @@ En este laboratorio has completado las siguientes actividades:
 | La estructura de carpetas sigue el estándar del curso (6 carpetas) | 10% |
 | Los mensajes del ciclo de vida aparecen correctamente en consola | 15% |
 | El repositorio Git tiene 2 commits, ramas `main`/`develop` y está en GitHub | 15% |
-| El struct `Task` y enum `Priority` están correctamente implementados | 15% |
+| El struct `TaskItem` y enum `Priority` están correctamente implementados | 15% |
 | El protocolo `TaskRepository` y `InMemoryTaskRepository` funcionan con CRUD y closures | 15% |
 | Se demuestra el uso de breakpoints y LLDB para inspeccionar variables | 10% |
 

@@ -69,84 +69,55 @@ git pull origin develop
 open TaskManagerApp.xcodeproj
 ```
 
-Verifica la compilación con **⌘ + B** en Xcode. Si no tienes el proyecto de módulos anteriores, utiliza el starter project proporcionado por el instructor y clónalo en `~/Developer/TaskManagerApp`.
+Verifica la compilación con **⌘ + B** en Xcode. Si no tienes el proyecto de módulos anteriores, utiliza el starter project proporcionado por el instructor (con los Labs 01–05 resueltos) y clónalo en `~/Developer/TaskManagerApp`.
 
 ---
 
-## Código Base Requerido (Starter)
+## Código Base Requerido
 
-Antes de iniciar las fases de testing, necesitas asegurarte de que tu proyecto contiene los archivos de modelo y lógica de negocio sobre los que escribirás pruebas. Si tu proyecto ya los tiene de módulos anteriores, verifica que coincidan en estructura. Si partes del starter project, crea los siguientes archivos.
+Este laboratorio trabaja sobre el proyecto de los Labs 01–05. **No vuelvas a crear** `TaskItem`, `TaskRepository` ni `InMemoryTaskRepository`: ya existen y otros archivos dependen de ellos (si los declararas de nuevo, Xcode marcaría *"Invalid redeclaration"*). Lo único nuevo es `TaskManager`, la clase con las reglas de negocio que vas a probar y, en la Fase 3, a refactorizar.
 
-### Paso 0 — Verificar o crear el modelo y el gestor de tareas
+### Paso 0 — Preparar el modelo y crear `TaskManager`
 
-**Objetivo:** Garantizar que existen `Task.swift` y `TaskManager.swift` en el target principal con la estructura que las pruebas ejercitarán.
+**Objetivo:** Confirmar que el modelo del Lab 01 está listo para las pruebas y crear `TaskManager.swift` con las reglas de negocio (validación, filtros y estadísticas).
 
 **Instrucciones:**
 
-1. En Xcode, selecciona la carpeta `TaskManagerApp` en el Project Navigator.
+1. Abre `Models/TaskItem.swift` (Lab 01) y verifica que contiene `enum Priority` (`low`, `medium`, `high`, `critical`) y `struct TaskItem` con `id`, `title`, `taskDescription` (opcional), `isCompleted`, `priority`, `createdAt` y `dueDate` (opcional). No lo modifiques.
 
-2. Verifica que exista el archivo `Task.swift`. Si no existe, créalo con **File → New → File → Swift File** y nómbralo `Task`. Asegúrate de que el target `TaskManagerApp` esté marcado. Escribe el siguiente contenido:
+> **Recuerda:** El inicializador del Lab 01 recibe los argumentos en este orden: `TaskItem(title:taskDescription:isCompleted:priority:dueDate:)`. Todos menos `title` tienen valor por defecto. `task.description` **no** es la descripción de la tarea: es el texto con formato de `CustomStringConvertible` (por ejemplo `⬜️ 🟡 [Media] Comprar leche`); la descripción está en `taskDescription`.
 
-```swift
-// Task.swift — Target: TaskManagerApp
-
-import Foundation
-
-enum TaskPriority: Int, Comparable {
-    case low = 0
-    case medium = 1
-    case high = 2
-
-    static func < (lhs: TaskPriority, rhs: TaskPriority) -> Bool {
-        lhs.rawValue < rhs.rawValue
-    }
-}
-
-enum TaskError: Error, Equatable {
-    case emptyTitle
-    case invalidDate
-    case duplicateTask
-}
-
-struct Task: Identifiable, Equatable {
-    let id: UUID
-    var title: String
-    var description: String
-    var isCompleted: Bool
-    var dueDate: Date?
-    var priority: TaskPriority
-
-    init(
-        id: UUID = UUID(),
-        title: String,
-        description: String = "",
-        isCompleted: Bool = false,
-        dueDate: Date? = nil,
-        priority: TaskPriority = .medium
-    ) {
-        self.id = id
-        self.title = title
-        self.description = description
-        self.isCompleted = isCompleted
-        self.dueDate = dueDate
-        self.priority = priority
-    }
-}
-```
-
-3. Verifica que exista `TaskManager.swift`. Si no existe, créalo de la misma forma con el siguiente contenido:
+2. En el grupo `Services`, crea `TaskManager.swift` (target `TaskManagerApp`) con el siguiente contenido:
 
 ```swift
 // TaskManager.swift — Target: TaskManagerApp
 
 import Foundation
 
-class TaskManager {
-    private(set) var tasks: [Task] = []
+/// Errores de las reglas de negocio de TaskManager.
+enum TaskError: Error, Equatable {
+    case emptyTitle
+    case invalidDate
+    case duplicateTask
+}
+
+/// Permite comparar prioridades (.high > .low) en filtros y ordenamientos.
+extension Priority: Comparable {
+    static func < (lhs: Priority, rhs: Priority) -> Bool {
+        lhs.rawValue < rhs.rawValue
+    }
+}
+
+/// Reglas de negocio sobre las tareas.
+/// ⚠️ Versión inicial: guarda las tareas en su propio array.
+/// En la Fase 3 detectarás que esto viola DIP y lo refactorizarás.
+final class TaskManager {
+    private(set) var tasks: [TaskItem] = []
 
     // MARK: - Agregar tarea
 
-    func addTask(title: String, description: String = "", dueDate: Date? = nil, priority: TaskPriority = .medium) throws -> Task {
+    @discardableResult
+    func addTask(title: String, description: String = "", dueDate: Date? = nil, priority: Priority = .medium) throws -> TaskItem {
         let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedTitle.isEmpty else {
             throw TaskError.emptyTitle
@@ -160,13 +131,20 @@ class TaskManager {
             throw TaskError.duplicateTask
         }
 
-        let task = Task(title: trimmedTitle, description: description, dueDate: dueDate, priority: priority)
+        // Inicializador del Lab 01 (orden: title, taskDescription, isCompleted, priority, dueDate)
+        let task = TaskItem(
+            title: trimmedTitle,
+            taskDescription: description.isEmpty ? nil : description,
+            priority: priority,
+            dueDate: dueDate
+        )
         tasks.append(task)
         return task
     }
 
     // MARK: - Eliminar tarea
 
+    @discardableResult
     func removeTask(by id: UUID) -> Bool {
         guard let index = tasks.firstIndex(where: { $0.id == id }) else {
             return false
@@ -177,6 +155,7 @@ class TaskManager {
 
     // MARK: - Completar tarea
 
+    @discardableResult
     func toggleComplete(for id: UUID) -> Bool {
         guard let index = tasks.firstIndex(where: { $0.id == id }) else {
             return false
@@ -187,23 +166,23 @@ class TaskManager {
 
     // MARK: - Filtrar tareas
 
-    func pendingTasks() -> [Task] {
+    func pendingTasks() -> [TaskItem] {
         tasks.filter { !$0.isCompleted }
     }
 
-    func completedTasks() -> [Task] {
+    func completedTasks() -> [TaskItem] {
         tasks.filter { $0.isCompleted }
     }
 
-    func searchTasks(query: String) -> [Task] {
+    func searchTasks(query: String) -> [TaskItem] {
         let lowered = query.lowercased()
         return tasks.filter {
             $0.title.lowercased().contains(lowered) ||
-            $0.description.lowercased().contains(lowered)
+            ($0.taskDescription ?? "").lowercased().contains(lowered)
         }
     }
 
-    func tasksSorted(by priority: Bool = true) -> [Task] {
+    func tasksSorted(by priority: Bool = true) -> [TaskItem] {
         if priority {
             return tasks.sorted { $0.priority > $1.priority }
         }
@@ -220,14 +199,16 @@ class TaskManager {
 }
 ```
 
-4. Compila con **⌘ + B** para confirmar que no hay errores.
+> **Nota:** `TaskError` es independiente de `AppError` (Lab 05): `TaskError` describe las reglas de `TaskManager` y es lo que verifican las pruebas con `XCTAssertThrowsError`.
 
-5. Haz un commit inicial si estos archivos son nuevos:
+3. Compila con **⌘ + B** para confirmar que no hay errores.
+
+4. Haz un commit:
 
 ```bash
 cd ~/Developer/TaskManagerApp
 git add -A
-git commit -m "feat: add Task model and TaskManager business logic"
+git commit -m "feat: add TaskManager business logic"
 ```
 
 ---
@@ -258,7 +239,7 @@ git commit -m "feat: add Task model and TaskManager business logic"
 
 ### Paso 2 — Crear el archivo TaskModelTests.swift
 
-**Objetivo:** Implementar pruebas unitarias para validar la creación y propiedades del modelo `Task`.
+**Objetivo:** Implementar pruebas unitarias para validar la creación y propiedades del modelo `TaskItem`.
 
 **Instrucciones:**
 
@@ -278,11 +259,11 @@ final class TaskModelTests: XCTestCase {
 
     func testTaskCreation_WithRequiredFields_SetsPropertiesCorrectly() {
         // Arrange & Act
-        let task = Task(title: "Comprar leche")
+        let task = TaskItem(title: "Comprar leche")
 
         // Assert
         XCTAssertEqual(task.title, "Comprar leche")
-        XCTAssertEqual(task.description, "")
+        XCTAssertNil(task.taskDescription)
         XCTAssertFalse(task.isCompleted)
         XCTAssertNil(task.dueDate)
         XCTAssertEqual(task.priority, .medium)
@@ -293,25 +274,26 @@ final class TaskModelTests: XCTestCase {
         let date = Date().addingTimeInterval(86400) // mañana
 
         // Act
-        let task = Task(
+        // (orden del inicializador del Lab 01)
+        let task = TaskItem(
             title: "Estudiar Swift",
-            description: "Leer capítulo 6",
+            taskDescription: "Leer capítulo 6",
             isCompleted: true,
-            dueDate: date,
-            priority: .high
+            priority: .high,
+            dueDate: date
         )
 
         // Assert
         XCTAssertEqual(task.title, "Estudiar Swift")
-        XCTAssertEqual(task.description, "Leer capítulo 6")
+        XCTAssertEqual(task.taskDescription, "Leer capítulo 6")
         XCTAssertTrue(task.isCompleted)
         XCTAssertEqual(task.dueDate, date)
         XCTAssertEqual(task.priority, .high)
     }
 
     func testTaskCreation_GeneratesUniqueIDs() {
-        let task1 = Task(title: "Tarea 1")
-        let task2 = Task(title: "Tarea 2")
+        let task1 = TaskItem(title: "Tarea 1")
+        let task2 = TaskItem(title: "Tarea 2")
 
         XCTAssertNotEqual(task1.id, task2.id, "Cada tarea debe tener un UUID único")
     }
@@ -319,9 +301,10 @@ final class TaskModelTests: XCTestCase {
     // MARK: - Pruebas de prioridad
 
     func testTaskPriority_HighIsGreaterThanLow() {
-        XCTAssertTrue(TaskPriority.high > TaskPriority.low)
-        XCTAssertTrue(TaskPriority.medium > TaskPriority.low)
-        XCTAssertTrue(TaskPriority.high > TaskPriority.medium)
+        // Usa la conformancia Comparable agregada en TaskManager.swift (Paso 0)
+        XCTAssertTrue(Priority.high > Priority.low)
+        XCTAssertTrue(Priority.medium > Priority.low)
+        XCTAssertTrue(Priority.critical > Priority.high)
     }
 }
 ```
@@ -420,11 +403,25 @@ final class TaskManagerTests: XCTestCase {
         XCTAssertFalse(result)
     }
 
+    // MARK: - Pruebas: Completar tarea
+
+    func testToggleComplete_WithValidID_MarksTaskAsCompleted() throws {
+        // Arrange
+        let task = try sut.addTask(title: "Por completar")
+
+        // Act
+        let result = sut.toggleComplete(for: task.id)
+
+        // Assert
+        XCTAssertTrue(result)
+        XCTAssertTrue(sut.tasks[0].isCompleted)
+    }
+
     // MARK: - Pruebas: Filtrado
 
     func testPendingTasks_ReturnsOnlyIncompleteTasks() throws {
         // Arrange
-        let task1 = try sut.addTask(title: "Pendiente")
+        let _ = try sut.addTask(title: "Pendiente")
         let _ = try sut.addTask(title: "Completada")
         sut.toggleComplete(for: sut.tasks[1].id)
 
@@ -488,7 +485,7 @@ final class TaskManagerTests: XCTestCase {
 ```bash
 cd ~/Developer/TaskManagerApp
 git add -A
-git commit -m "feat(tests): add unit tests for Task model and TaskManager (15 tests)"
+git commit -m "feat(tests): add unit tests for TaskItem model and TaskManager (15 tests)"
 ```
 
 ---
@@ -514,170 +511,106 @@ git commit -m "feat(tests): add unit tests for Task model and TaskManager (15 te
 
 ### Paso 6 — Agregar Accessibility Identifiers a la interfaz
 
-**Objetivo:** Preparar la app para que los elementos de UI sean localizables por XCUITest.
+**Objetivo:** Preparar la interfaz UIKit existente (Labs 02–05) para que XCUITest pueda localizar sus elementos, y agregar la búsqueda que probarán las pruebas de UI.
 
 **Instrucciones:**
 
-Las pruebas de UI necesitan identificar elementos por `accessibilityIdentifier`. Debes agregar estos identificadores en el código de la interfaz. Crea o modifica el ViewController principal de la app.
+Las pruebas de UI localizan elementos por `accessibilityIdentifier`. **No crees un `TaskListViewController` nuevo ni cambies el `SceneDelegate`**: la pantalla principal ya es la del Lab 02 (Storyboard con `UINavigationController` → `TaskListViewController`, formulario modal `AddTaskViewController`, borrado con swipe "Eliminar"). Solo vas a agregarle identificadores, una barra de búsqueda y datos de prueba.
 
-1. Si tu app usa UIKit con Storyboard, localiza el ViewController que muestra la lista de tareas. Si no tienes uno funcional, crea `TaskListViewController.swift` en el target `TaskManagerApp`:
+1. **Datos fijos para las pruebas.** Abre `AppConfiguration.swift` (Lab 03) y agrega este bloque al inicio de `makeRepository(modelContext:)`. Cuando la app se lanza desde XCUITest, usa un repositorio en memoria con las 3 tareas de ejemplo del Lab 02 y preferencias por defecto, así las pruebas no dependen de lo que haya guardado en SwiftData:
 
 ```swift
-// TaskListViewController.swift — Target: TaskManagerApp
+// Al inicio de makeRepository(modelContext:)
+if ProcessInfo.processInfo.arguments.contains("-UITesting") {
+    UserPreferencesService.shared.resetToDefaults()
+    return InMemoryTaskRepository(seedSampleData: true)
+}
+```
 
-import UIKit
+> **Nota:** Las 3 tareas de ejemplo son "Comprar víveres", "Estudiar Swift" y "Hacer ejercicio". Solo una contiene "Comprar", lo que usa la prueba de búsqueda.
 
-class TaskListViewController: UITableViewController {
+2. **Identificadores en la lista.** Abre `UIKitViews/TaskListViewController.swift` y haz estos cambios:
 
-    var taskManager = TaskManager()
+   a. En `configureNavigationBar()`, identifica el botón **+** (agrega la línea después de crear `addButton`):
 
-    override func viewDidLoad() {
-        super.viewDidLoad()
-        title = "Mis Tareas"
-        navigationItem.rightBarButtonItem = UIBarButtonItem(
-            barButtonSystemItem: .add,
-            target: self,
-            action: #selector(addTaskTapped)
-        )
+```swift
+addButton.accessibilityIdentifier = "addTaskButton"
+```
 
-        // Accessibility Identifiers
-        tableView.accessibilityIdentifier = "taskTableView"
-        navigationItem.rightBarButtonItem?.accessibilityIdentifier = "addTaskButton"
+   b. En `viewDidLoad()`, después de `setupSyncUI()`, identifica la tabla y agrega la barra de búsqueda:
 
-        // Configurar search controller
-        let searchController = UISearchController(searchResultsController: nil)
-        searchController.searchBar.accessibilityIdentifier = "taskSearchBar"
-        searchController.searchBar.placeholder = "Buscar tareas..."
-        searchController.searchResultsUpdater = self
-        navigationItem.searchController = searchController
+```swift
+tableView.accessibilityIdentifier = "taskTableView"
 
-        tableView.register(UITableViewCell.self, forCellReuseIdentifier: "TaskCell")
+let searchController = UISearchController(searchResultsController: nil)
+searchController.searchBar.placeholder = "Buscar tareas..."
+searchController.searchBar.accessibilityIdentifier = "taskSearchBar"
+searchController.searchResultsUpdater = self
+searchController.obscuresBackgroundDuringPresentation = false
+navigationItem.searchController = searchController
+```
 
-        // Agregar tareas de ejemplo para UI Testing
-        if ProcessInfo.processInfo.arguments.contains("-UITesting") {
-            try? taskManager.addTask(title: "Tarea de ejemplo", description: "Descripción de prueba", priority: .high)
-            try? taskManager.addTask(title: "Comprar víveres", description: "Ir al supermercado", priority: .medium)
-            try? taskManager.addTask(title: "Estudiar iOS", description: "Practicar XCTest", priority: .low)
-        }
-    }
+   c. En `tableView(_:cellForRowAt:)`, antes del `return cell`:
 
-    @objc func addTaskTapped() {
-        let alert = UIAlertController(title: "Nueva Tarea", message: nil, preferredStyle: .alert)
-        alert.addTextField { textField in
-            textField.placeholder = "Título de la tarea"
-            textField.accessibilityIdentifier = "taskTitleTextField"
-        }
-        alert.addAction(UIAlertAction(title: "Cancelar", style: .cancel))
-        alert.addAction(UIAlertAction(title: "Guardar", style: .default) { [weak self] _ in
-            guard let title = alert.textFields?.first?.text else { return }
-            do {
-                try self?.taskManager.addTask(title: title)
-                self?.tableView.reloadData()
-            } catch TaskError.emptyTitle {
-                self?.showError("El título no puede estar vacío")
-            } catch TaskError.duplicateTask {
-                self?.showError("Ya existe una tarea con ese nombre")
-            } catch {
-                self?.showError("Error desconocido")
-            }
-        })
-        alert.view.accessibilityIdentifier = "addTaskAlert"
-        present(alert, animated: true)
-    }
+```swift
+cell.accessibilityIdentifier = "taskCell_\(indexPath.row)"
+```
 
-    func showError(_ message: String) {
-        let errorAlert = UIAlertController(title: "Error", message: message, preferredStyle: .alert)
-        errorAlert.addAction(UIAlertAction(title: "OK", style: .default))
-        errorAlert.view.accessibilityIdentifier = "errorAlert"
-        present(errorAlert, animated: true)
-    }
+   d. Agrega la propiedad del texto de búsqueda junto a `tasks`, y al final de `loadTasks()`, **antes** de `tasks = result`, aplica el filtro:
 
-    // MARK: - Table View Data Source
+```swift
+// Propiedad
+var searchQuery = ""
 
-    var filteredTasks: [Task]?
-
-    var displayedTasks: [Task] {
-        filteredTasks ?? taskManager.tasks
-    }
-
-    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
-        let count = displayedTasks.count
-        if count == 0 {
-            let label = UILabel()
-            label.text = "No hay tareas"
-            label.textAlignment = .center
-            label.accessibilityIdentifier = "emptyStateLabel"
-            tableView.backgroundView = label
-        } else {
-            tableView.backgroundView = nil
-        }
-        return count
-    }
-
-    override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
-        let cell = tableView.dequeueReusableCell(withIdentifier: "TaskCell", for: indexPath)
-        let task = displayedTasks[indexPath.row]
-        cell.textLabel?.text = task.title
-        cell.accessoryType = task.isCompleted ? .checkmark : .none
-        cell.accessibilityIdentifier = "taskCell_\(indexPath.row)"
-        return cell
-    }
-
-    override func tableView(_ tableView: UITableView, commit editingStyle: UITableViewCell.EditingStyle, forRowAt indexPath: IndexPath) {
-        if editingStyle == .delete {
-            let task = displayedTasks[indexPath.row]
-            _ = taskManager.removeTask(by: task.id)
-            filteredTasks = nil
-            tableView.deleteRows(at: [indexPath], with: .automatic)
-        }
-    }
-
-    override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
-        let task = displayedTasks[indexPath.row]
-        _ = taskManager.toggleComplete(for: task.id)
-        tableView.reloadRows(at: [indexPath], with: .automatic)
+// En loadTasks(), antes de `tasks = result`:
+if !searchQuery.isEmpty {
+    result = result.filter {
+        $0.title.localizedCaseInsensitiveContains(searchQuery) ||
+        ($0.taskDescription ?? "").localizedCaseInsensitiveContains(searchQuery)
     }
 }
+```
 
+   e. Al final del archivo, agrega la conformancia a `UISearchResultsUpdating`:
+
+```swift
 // MARK: - UISearchResultsUpdating
 
 extension TaskListViewController: UISearchResultsUpdating {
     func updateSearchResults(for searchController: UISearchController) {
-        if let query = searchController.searchBar.text, !query.isEmpty {
-            filteredTasks = taskManager.searchTasks(query: query)
-        } else {
-            filteredTasks = nil
-        }
-        tableView.reloadData()
+        searchQuery = searchController.searchBar.text ?? ""
+        loadTasks()
     }
 }
 ```
 
-2. Asegúrate de que el `SceneDelegate.swift` (o `AppDelegate.swift`) establece este ViewController como root. En `SceneDelegate.swift`:
+   f. En `prepare(for:sender:)`, dentro del bloque de `presentAddTask`, presenta el formulario a pantalla completa. Con la presentación por defecto (hoja), `viewWillAppear` no se vuelve a llamar al cerrar el formulario y la tarea nueva no aparecería hasta recargar:
 
 ```swift
-// SceneDelegate.swift — dentro de scene(_:willConnectTo:options:)
-
-func scene(_ scene: UIScene, willConnectTo session: UISceneSession, options connectionOptions: UIScene.ConnectionOptions) {
-    guard let windowScene = (scene as? UIWindowScene) else { return }
-    let window = UIWindow(windowScene: windowScene)
-    let taskListVC = TaskListViewController(style: .plain)
-    let navController = UINavigationController(rootViewController: taskListVC)
-    window.rootViewController = navController
-    window.makeKeyAndVisible()
-    self.window = window
+} else if segue.identifier == "presentAddTask",
+          let navController = segue.destination as? UINavigationController,
+          let addVC = navController.topViewController as? AddTaskViewController {
+    navController.modalPresentationStyle = .fullScreen   // 🆕
+    addVC.repository = repository
 }
 ```
 
-> **Nota:** Si tu proyecto usa Storyboards, puedes configurar el ViewController en el Storyboard y agregar los `accessibilityIdentifier` en `viewDidLoad()`. Lo importante es que los identifiers coincidan con los que usarán las pruebas de UI.
+3. **Identificadores en el formulario.** Abre `UIKitViews/AddTaskViewController.swift` (Lab 02) y, al final de `viewDidLoad()`, agrega:
 
-3. Compila con **⌘ + B** y ejecuta en el simulador **iPhone 15 Pro (iOS 17.5)** con **⌘ + R** para verificar que la app muestra la lista de tareas.
+```swift
+titleTextField.accessibilityIdentifier = "taskTitleTextField"
+navigationItem.rightBarButtonItem?.accessibilityIdentifier = "saveTaskButton"
+```
 
-4. Haz commit:
+> **Nota:** Se identifica el botón **Save** por `accessibilityIdentifier` porque su texto cambia según el idioma del simulador ("Save" / "Guardar"). La alerta de validación ya existe desde el Lab 02: título "Campo requerido", mensaje "El título de la tarea no puede estar vacío." y botón "OK".
+
+4. Compila con **⌘ + B** y ejecuta en el simulador **iPhone 15 Pro (iOS 17.5)** con **⌘ + R**. Verifica que la lista muestra la barra de búsqueda y que al escribir se filtran las tareas.
+
+5. Haz commit:
 
 ```bash
 git add -A
-git commit -m "feat(ui): add TaskListViewController with accessibility identifiers for UI testing"
+git commit -m "feat(ui): add accessibility identifiers and search to TaskListViewController"
 ```
 
 ### Paso 7 — Implementar las pruebas de UI
@@ -738,18 +671,19 @@ final class TaskManagerUITests: XCTestCase {
         XCTAssertTrue(addButton.waitForExistence(timeout: 3))
         addButton.tap()
 
-        // Escribir título en el alert
+        // Escribir título en el formulario
         let titleTextField = app.textFields["taskTitleTextField"]
         XCTAssertTrue(titleTextField.waitForExistence(timeout: 3), "El campo de texto debe aparecer")
         titleTextField.tap()
         titleTextField.typeText("Tarea UI Test")
 
-        // Guardar
-        app.buttons["Guardar"].tap()
+        // Guardar (botón Save del formulario modal del Lab 02)
+        app.navigationBars.buttons["saveTaskButton"].tap()
 
         // Assert: La nueva tarea aparece en la lista
-        let newCount = table.cells.count
-        XCTAssertEqual(newCount, initialCount + 1, "La lista debe tener una tarea más")
+        XCTAssertTrue(table.staticTexts["Tarea UI Test"].waitForExistence(timeout: 3),
+                      "La tarea nueva debe aparecer en la lista")
+        XCTAssertEqual(table.cells.count, initialCount + 1, "La lista debe tener una tarea más")
     }
 
     // MARK: - Test 3: Eliminación de una tarea mediante swipe
@@ -764,8 +698,8 @@ final class TaskManagerUITests: XCTestCase {
         let firstCell = table.cells["taskCell_0"]
         firstCell.swipeLeft()
 
-        // Pulsar botón Delete
-        let deleteButton = table.buttons["Delete"]
+        // Pulsar el botón "Eliminar" de la acción de swipe (Lab 02)
+        let deleteButton = table.buttons["Eliminar"]
         if deleteButton.waitForExistence(timeout: 2) {
             deleteButton.tap()
         }
@@ -809,14 +743,14 @@ final class TaskManagerUITests: XCTestCase {
         let titleTextField = app.textFields["taskTitleTextField"]
         XCTAssertTrue(titleTextField.waitForExistence(timeout: 3))
 
-        app.buttons["Guardar"].tap()
+        app.navigationBars.buttons["saveTaskButton"].tap()
 
-        // Assert: Debe aparecer un alert de error
-        let errorAlert = app.alerts.firstMatch
+        // Assert: Debe aparecer la alerta de validación del Lab 02
+        let errorAlert = app.alerts["Campo requerido"]
         XCTAssertTrue(errorAlert.waitForExistence(timeout: 3), "Debe mostrarse una alerta de error")
 
         // Verificar el mensaje
-        let errorMessage = errorAlert.staticTexts["El título no puede estar vacío"]
+        let errorMessage = errorAlert.staticTexts["El título de la tarea no puede estar vacío."]
         XCTAssertTrue(errorMessage.exists, "El mensaje de error debe indicar título vacío")
 
         // Cerrar el alert
@@ -872,20 +806,20 @@ touch REFACTORING_LOG.md
 
 ### Violación 1: Principio de Responsabilidad Única (SRP)
 - **Archivo:** `TaskListViewController.swift`
-- **Problema:** El ViewController gestiona la lógica de presentación (tabla, celdas,
-  navegación), la lógica de negocio (agregar/eliminar tareas a través de TaskManager)
-  y la lógica de búsqueda. Tiene demasiadas responsabilidades.
-- **Solución propuesta:** Extraer la lógica de negocio a una clase `TaskService`
-  separada que actúe como intermediario.
+- **Problema:** Además de la presentación (tabla, celdas, navegación, alertas),
+  `loadTasks()` lee el repositorio, aplica el filtro y el orden de las preferencias
+  (Lab 03) y la búsqueda (este lab), y el borrado llama directamente al repositorio.
+  El ViewController tiene demasiadas responsabilidades.
+- **Solución propuesta:** Extraer esa lógica a una clase `TaskService`; el
+  ViewController solo le pide las tareas visibles y le delega las acciones.
 
 ### Violación 2: Principio de Inversión de Dependencias (DIP)
 - **Archivo:** `TaskManager.swift`
-- **Problema:** `TaskManager` almacena las tareas directamente en un array en
-  memoria. Si en el futuro necesitamos persistir con CoreData, UserDefaults o una
-  API remota, habría que modificar `TaskManager` directamente. Las clases de alto
-  nivel dependen de una implementación concreta de almacenamiento.
-- **Solución propuesta:** Crear un protocolo `TaskRepositoryProtocol` que defina
-  las operaciones de persistencia, e inyectar la dependencia en `TaskManager`.
+- **Problema:** `TaskManager` guarda las tareas en su propio array. No puede usar
+  Core Data ni SwiftData (Lab 03): las reglas de negocio dependen de un
+  almacenamiento concreto.
+- **Solución propuesta:** Inyectar en `TaskManager` la abstracción que el proyecto
+  ya tiene desde el Lab 02: el protocolo `TaskRepository`.
 
 ### Violación 3: Principio de Segregación de Interfaces (ISP)
 - **Archivo:** `TaskManager.swift`
@@ -900,193 +834,50 @@ touch REFACTORING_LOG.md
 
 **Verificación:** Lee las 3 violaciones y confirma que cada una identifica un principio SOLID específico, el archivo afectado, el problema concreto y la solución propuesta.
 
-### Paso 10 — Refactorización 1: Extraer TaskService (SRP)
+### Paso 10 — Refactorización 1: Inyectar `TaskRepository` en `TaskManager` (DIP)
 
-**Objetivo:** Separar la lógica de negocio del ViewController creando una clase `TaskService`.
-
-**Instrucciones:**
-
-1. Crea el archivo `TaskService.swift` en el target `TaskManagerApp`:
-
-```swift
-// TaskService.swift — Target: TaskManagerApp
-
-import Foundation
-
-class TaskService {
-
-    private let taskManager: TaskManager
-
-    init(taskManager: TaskManager = TaskManager()) {
-        self.taskManager = taskManager
-    }
-
-    // MARK: - Operaciones de escritura
-
-    @discardableResult
-    func createTask(title: String, description: String = "", dueDate: Date? = nil, priority: TaskPriority = .medium) throws -> Task {
-        return try taskManager.addTask(title: title, description: description, dueDate: dueDate, priority: priority)
-    }
-
-    func deleteTask(by id: UUID) -> Bool {
-        return taskManager.removeTask(by: id)
-    }
-
-    func toggleTaskCompletion(for id: UUID) -> Bool {
-        return taskManager.toggleComplete(for: id)
-    }
-
-    // MARK: - Operaciones de lectura
-
-    var allTasks: [Task] {
-        taskManager.tasks
-    }
-
-    func pendingTasks() -> [Task] {
-        taskManager.pendingTasks()
-    }
-
-    func completedTasks() -> [Task] {
-        taskManager.completedTasks()
-    }
-
-    func search(query: String) -> [Task] {
-        taskManager.searchTasks(query: query)
-    }
-
-    func completionPercentage() -> Double {
-        taskManager.completionPercentage()
-    }
-}
-```
-
-2. Actualiza `TaskListViewController.swift` para usar `TaskService` en lugar de `TaskManager` directamente. Reemplaza la propiedad:
-
-```swift
-// ANTES:
-// var taskManager = TaskManager()
-
-// DESPUÉS:
-var taskService = TaskService()
-```
-
-3. Actualiza todas las referencias en el ViewController. Los cambios clave son:
-
-```swift
-// En viewDidLoad(), cambiar las llamadas de precarga:
-if ProcessInfo.processInfo.arguments.contains("-UITesting") {
-    try? taskService.createTask(title: "Tarea de ejemplo", description: "Descripción de prueba", priority: .high)
-    try? taskService.createTask(title: "Comprar víveres", description: "Ir al supermercado", priority: .medium)
-    try? taskService.createTask(title: "Estudiar iOS", description: "Practicar XCTest", priority: .low)
-}
-
-// En addTaskTapped(), cambiar:
-try self?.taskService.createTask(title: title)
-
-// En showError — sin cambios
-
-// En displayedTasks:
-var displayedTasks: [Task] {
-    filteredTasks ?? taskService.allTasks
-}
-
-// En commit editingStyle (delete):
-_ = taskService.deleteTask(by: task.id)
-
-// En didSelectRowAt:
-_ = taskService.toggleTaskCompletion(for: task.id)
-
-// En updateSearchResults:
-filteredTasks = taskService.search(query: query)
-```
-
-4. **Ejecuta ⌘ + U** para verificar que todas las pruebas (unitarias y de UI) siguen en verde.
-
-**Resultado esperado:** 20 pruebas ejecutadas (15 unitarias + 5 UI), todas aprobadas. La refactorización no introdujo regresiones.
-
-### Paso 11 — Refactorización 2: Crear TaskRepositoryProtocol (DIP)
-
-**Objetivo:** Invertir la dependencia de almacenamiento mediante un protocolo.
+**Objetivo:** Invertir la dependencia de almacenamiento reutilizando el protocolo `TaskRepository` del Lab 02, en lugar de crear uno nuevo.
 
 **Instrucciones:**
 
-1. Crea `TaskRepositoryProtocol.swift` en el target `TaskManagerApp`:
+1. **No crees** un protocolo `TaskRepositoryProtocol` ni otro `InMemoryTaskRepository`: el protocolo `TaskRepository` y sus tres implementaciones (`InMemoryTaskRepository`, `CoreDataTaskRepository`, `SwiftDataTaskRepository`) ya existen desde los Labs 02 y 03. Esa es precisamente la abstracción que pide DIP.
+
+2. Reemplaza el contenido de `TaskManager.swift` por la versión refactorizada. `TaskError` y la extensión `Priority: Comparable` no cambian; solo cambia la clase:
 
 ```swift
-// TaskRepositoryProtocol.swift — Target: TaskManagerApp
+// TaskManager.swift — Refactorizado con inyección de dependencias (DIP)
 
 import Foundation
 
-protocol TaskRepositoryProtocol {
-    var tasks: [Task] { get }
-    func save(_ task: Task)
-    func delete(by id: UUID) -> Bool
-    func update(_ task: Task)
-    func findAll() -> [Task]
-    func find(by id: UUID) -> Task?
+enum TaskError: Error, Equatable {
+    case emptyTitle
+    case invalidDate
+    case duplicateTask
 }
-```
 
-2. Crea `InMemoryTaskRepository.swift` como implementación concreta:
-
-```swift
-// InMemoryTaskRepository.swift — Target: TaskManagerApp
-
-import Foundation
-
-class InMemoryTaskRepository: TaskRepositoryProtocol {
-
-    private(set) var tasks: [Task] = []
-
-    func save(_ task: Task) {
-        tasks.append(task)
-    }
-
-    func delete(by id: UUID) -> Bool {
-        guard let index = tasks.firstIndex(where: { $0.id == id }) else {
-            return false
-        }
-        tasks.remove(at: index)
-        return true
-    }
-
-    func update(_ task: Task) {
-        guard let index = tasks.firstIndex(where: { $0.id == task.id }) else { return }
-        tasks[index] = task
-    }
-
-    func findAll() -> [Task] {
-        return tasks
-    }
-
-    func find(by id: UUID) -> Task? {
-        return tasks.first(where: { $0.id == id })
+extension Priority: Comparable {
+    static func < (lhs: Priority, rhs: Priority) -> Bool {
+        lhs.rawValue < rhs.rawValue
     }
 }
-```
 
-3. Refactoriza `TaskManager.swift` para depender del protocolo en lugar de un array interno:
+final class TaskManager {
 
-```swift
-// TaskManager.swift — Refactorizado con inyección de dependencias
+    /// Abstracción del Lab 02: puede ser en memoria, Core Data o SwiftData.
+    private let repository: TaskRepository
 
-import Foundation
-
-class TaskManager {
-
-    private let repository: TaskRepositoryProtocol
-
-    var tasks: [Task] {
-        repository.findAll()
+    var tasks: [TaskItem] {
+        repository.fetchAll()
     }
 
-    init(repository: TaskRepositoryProtocol = InMemoryTaskRepository()) {
+    init(repository: TaskRepository = InMemoryTaskRepository()) {
         self.repository = repository
     }
 
     // MARK: - Agregar tarea
 
-    func addTask(title: String, description: String = "", dueDate: Date? = nil, priority: TaskPriority = .medium) throws -> Task {
+    @discardableResult
+    func addTask(title: String, description: String = "", dueDate: Date? = nil, priority: Priority = .medium) throws -> TaskItem {
         let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedTitle.isEmpty else {
             throw TaskError.emptyTitle
@@ -1100,45 +891,51 @@ class TaskManager {
             throw TaskError.duplicateTask
         }
 
-        let task = Task(title: trimmedTitle, description: description, dueDate: dueDate, priority: priority)
-        repository.save(task)
+        let task = TaskItem(
+            title: trimmedTitle,
+            taskDescription: description.isEmpty ? nil : description,
+            priority: priority,
+            dueDate: dueDate
+        )
+        repository.add(task)
         return task
     }
 
     // MARK: - Eliminar tarea
 
+    @discardableResult
     func removeTask(by id: UUID) -> Bool {
-        return repository.delete(by: id)
+        repository.delete(byId: id)
     }
 
     // MARK: - Completar tarea
 
+    @discardableResult
     func toggleComplete(for id: UUID) -> Bool {
-        guard var task = repository.find(by: id) else { return false }
+        guard var task = repository.fetchById(id) else { return false }
         task.isCompleted.toggle()
-        repository.update(task)
-        return true
+        return repository.update(task)
     }
 
     // MARK: - Filtrar tareas
 
-    func pendingTasks() -> [Task] {
+    func pendingTasks() -> [TaskItem] {
         tasks.filter { !$0.isCompleted }
     }
 
-    func completedTasks() -> [Task] {
+    func completedTasks() -> [TaskItem] {
         tasks.filter { $0.isCompleted }
     }
 
-    func searchTasks(query: String) -> [Task] {
+    func searchTasks(query: String) -> [TaskItem] {
         let lowered = query.lowercased()
         return tasks.filter {
             $0.title.lowercased().contains(lowered) ||
-            $0.description.lowercased().contains(lowered)
+            ($0.taskDescription ?? "").lowercased().contains(lowered)
         }
     }
 
-    func tasksSorted(by priority: Bool = true) -> [Task] {
+    func tasksSorted(by priority: Bool = true) -> [TaskItem] {
         if priority {
             return tasks.sorted { $0.priority > $1.priority }
         }
@@ -1155,17 +952,116 @@ class TaskManager {
 }
 ```
 
-4. **Ejecuta ⌘ + U** inmediatamente.
+3. **Ejecuta ⌘ + U** inmediatamente.
 
-**Resultado esperado:** Todas las pruebas siguen en verde. La inyección de dependencias no alteró el comportamiento porque `InMemoryTaskRepository` replica el almacenamiento original en array.
+**Resultado esperado:** 20 pruebas ejecutadas (15 unitarias + 5 UI), todas aprobadas. Las pruebas de `TaskManagerTests` no cambian: `TaskManager()` usa por defecto un `InMemoryTaskRepository` vacío, que conserva el orden de inserción igual que el array original.
 
-### Paso 12 — Agregar pruebas unitarias para el repositorio
+### Paso 11 — Refactorización 2: Extraer `TaskService` (SRP)
 
-**Objetivo:** Verificar la nueva capa de abstracción con pruebas específicas.
+**Objetivo:** Sacar del ViewController la lógica de datos (preferencias, búsqueda, borrado y estado) a una clase `TaskService`.
 
 **Instrucciones:**
 
-1. Crea `TaskRepositoryTests.swift` en el target `TaskManagerAppTests`:
+1. Crea `TaskService.swift` en el grupo `Services` (target `TaskManagerApp`):
+
+```swift
+// TaskService.swift — Target: TaskManagerApp
+
+import Foundation
+
+/// Lógica de la lista de tareas que antes vivía en TaskListViewController.
+final class TaskService {
+
+    private let taskManager: TaskManager
+    private let preferences: UserPreferencesService
+
+    init(taskManager: TaskManager, preferences: UserPreferencesService = .shared) {
+        self.taskManager = taskManager
+        self.preferences = preferences
+    }
+
+    // MARK: - Operaciones de escritura
+
+    @discardableResult
+    func createTask(title: String, description: String = "", dueDate: Date? = nil, priority: Priority = .medium) throws -> TaskItem {
+        try taskManager.addTask(title: title, description: description, dueDate: dueDate, priority: priority)
+    }
+
+    @discardableResult
+    func deleteTask(by id: UUID) -> Bool {
+        taskManager.removeTask(by: id)
+    }
+
+    @discardableResult
+    func toggleTaskCompletion(for id: UUID) -> Bool {
+        taskManager.toggleComplete(for: id)
+    }
+
+    // MARK: - Operaciones de lectura
+
+    /// Tareas a mostrar: búsqueda + filtro y orden de las preferencias (Lab 03).
+    func visibleTasks(matching query: String = "") -> [TaskItem] {
+        var result = query.isEmpty ? taskManager.tasks : taskManager.searchTasks(query: query)
+
+        if !preferences.showCompletedTasks {
+            result = result.filter { !$0.isCompleted }
+        }
+
+        switch preferences.sortOrder {
+        case .createdAtAscending:
+            result.sort { $0.createdAt < $1.createdAt }
+        case .createdAtDescending:
+            result.sort { $0.createdAt > $1.createdAt }
+        case .titleAscending:
+            result.sort { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
+        case .titleDescending:
+            result.sort { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedDescending }
+        }
+        return result
+    }
+
+    func completionPercentage() -> Double {
+        taskManager.completionPercentage()
+    }
+}
+```
+
+2. En `TaskListViewController.swift`, agrega el servicio junto a `repository`. Usa el **mismo** repositorio, para que el formulario modal y la sincronización (Lab 04), que siguen usando `repository`, vean los mismos datos:
+
+```swift
+lazy var taskService = TaskService(taskManager: TaskManager(repository: repository))
+```
+
+3. Reemplaza `loadTasks()` (el filtro y el orden del Lab 03 y la búsqueda del Paso 6 quedan dentro de `TaskService`):
+
+```swift
+func loadTasks() {
+    tasks = taskService.visibleTasks(matching: searchQuery)
+    tableView.reloadData()
+}
+```
+
+4. En la acción de swipe "Eliminar", cambia la llamada al repositorio por el servicio:
+
+```swift
+// ANTES:
+// self.repository.delete(byId: task.id)
+
+// DESPUÉS:
+self.taskService.deleteTask(by: task.id)
+```
+
+5. **Ejecuta ⌘ + U** para verificar que todas las pruebas (unitarias y de UI) siguen en verde.
+
+**Resultado esperado:** 20 pruebas ejecutadas (15 unitarias + 5 UI), todas aprobadas. La refactorización no introdujo regresiones.
+
+### Paso 12 — Agregar pruebas unitarias para el repositorio
+
+**Objetivo:** Verificar con pruebas el `InMemoryTaskRepository` del Lab 02, la implementación que ahora usa `TaskManager` por defecto.
+
+**Instrucciones:**
+
+1. Crea `TaskRepositoryTests.swift` en el target `TaskManagerAppTests`. `InMemoryTaskRepository()` sin argumentos empieza vacío (`seedSampleData` es `false` por defecto):
 
 ```swift
 // TaskRepositoryTests.swift — Target: TaskManagerAppTests
@@ -1187,39 +1083,40 @@ final class TaskRepositoryTests: XCTestCase {
         super.tearDown()
     }
 
-    func testSave_AddsTaskToRepository() {
-        let task = Task(title: "Test task")
-        sut.save(task)
-        XCTAssertEqual(sut.tasks.count, 1)
-        XCTAssertEqual(sut.tasks.first?.title, "Test task")
+    func testAdd_AddsTaskToRepository() {
+        let task = TaskItem(title: "Test task")
+        sut.add(task)
+        XCTAssertEqual(sut.count, 1)
+        XCTAssertEqual(sut.fetchAll().first?.title, "Test task")
     }
 
-    func testDelete_RemovesTaskFromRepository() {
-        let task = Task(title: "To delete")
-        sut.save(task)
-        let result = sut.delete(by: task.id)
+    func testDeleteById_RemovesTaskFromRepository() {
+        let task = TaskItem(title: "To delete")
+        sut.add(task)
+        let result = sut.delete(byId: task.id)
         XCTAssertTrue(result)
-        XCTAssertEqual(sut.tasks.count, 0)
+        XCTAssertEqual(sut.count, 0)
     }
 
     func testUpdate_ModifiesExistingTask() {
-        var task = Task(title: "Original")
-        sut.save(task)
+        var task = TaskItem(title: "Original")
+        sut.add(task)
         task.title = "Modificada"
-        sut.update(task)
-        XCTAssertEqual(sut.tasks.first?.title, "Modificada")
+        let result = sut.update(task)
+        XCTAssertTrue(result)
+        XCTAssertEqual(sut.fetchAll().first?.title, "Modificada")
     }
 
-    func testFind_WithValidID_ReturnsTask() {
-        let task = Task(title: "Findable")
-        sut.save(task)
-        let found = sut.find(by: task.id)
+    func testFetchById_WithValidID_ReturnsTask() {
+        let task = TaskItem(title: "Findable")
+        sut.add(task)
+        let found = sut.fetchById(task.id)
         XCTAssertNotNil(found)
         XCTAssertEqual(found?.title, "Findable")
     }
 
-    func testFind_WithInvalidID_ReturnsNil() {
-        XCTAssertNil(sut.find(by: UUID()))
+    func testFetchById_WithInvalidID_ReturnsNil() {
+        XCTAssertNil(sut.fetchById(UUID()))
     }
 }
 ```
@@ -1251,14 +1148,14 @@ final class TaskRepositoryTests: XCTestCase {
 
 | Archivo | Cobertura Esperada |
 |---|---|
-| `Task.swift` | ≥ 90 % |
+| `TaskItem.swift` | ≥ 90 % |
 | `TaskManager.swift` | ≥ 80 % |
 | `TaskService.swift` | ≥ 70 % |
-| `InMemoryTaskRepository.swift` | ≥ 90 % |
+| `TaskRepository.swift` (`InMemoryTaskRepository`, Lab 02) | ≥ 90 % |
 | `TaskListViewController.swift` | Variable (las pruebas de UI contribuyen) |
 
 **Verificación:**
-- Los archivos de modelo y servicio (`Task.swift`, `TaskManager.swift`, `TaskService.swift`, `InMemoryTaskRepository.swift`) deben mostrar ≥ 70 % de cobertura.
+- Los archivos de modelo y servicio (`TaskItem.swift`, `TaskManager.swift`, `TaskService.swift`, `TaskRepository.swift`) deben mostrar ≥ 70 % de cobertura.
 - Si algún archivo está por debajo del 70 %, identifica los métodos no cubiertos y considera agregar pruebas adicionales.
 
 > **Tip:** Haz clic en un archivo en el reporte de cobertura para ver línea por línea qué código fue ejecutado (verde) y cuál no (rojo). Las barras en el margen derecho del editor de código también muestran la cobertura cuando está habilitada.
@@ -1268,12 +1165,11 @@ final class TaskRepositoryTests: XCTestCase {
 ```bash
 cd ~/Developer/TaskManagerApp
 git add -A
-git commit -m "refactor: apply SRP and DIP principles, add TaskService and TaskRepositoryProtocol
+git commit -m "refactor: apply DIP and SRP principles with TaskRepository injection and TaskService
 
-- Extract business logic from ViewController to TaskService (SRP)
-- Create TaskRepositoryProtocol for dependency inversion (DIP)
-- Add InMemoryTaskRepository as concrete implementation
-- Add 5 repository unit tests
+- Inject the existing TaskRepository protocol into TaskManager (DIP)
+- Extract list logic from TaskListViewController to TaskService (SRP)
+- Add 5 unit tests for InMemoryTaskRepository
 - Enable code coverage reporting
 - Document refactoring decisions in REFACTORING_LOG.md"
 ```
@@ -1302,10 +1198,10 @@ Ejecuta la suite completa de pruebas una última vez para confirmar la integrida
 | **Total** | **25** | **25 aprobadas, 0 fallos** |
 
 3. Abre **Report Navigator** (⌘ + 9) → último reporte → pestaña **Coverage**:
-   - `Task.swift`: ≥ 70 %
+   - `TaskItem.swift`: ≥ 70 %
    - `TaskManager.swift`: ≥ 70 %
    - `TaskService.swift`: ≥ 70 %
-   - `InMemoryTaskRepository.swift`: ≥ 70 %
+   - `TaskRepository.swift`: ≥ 70 %
 
 4. Verifica el historial de Git:
 
@@ -1316,11 +1212,11 @@ git log --oneline -5
 **Salida esperada (aproximada):**
 
 ```
-abc1234 refactor: apply SRP and DIP principles, add TaskService and TaskRepositoryProtocol
+abc1234 refactor: apply DIP and SRP principles with TaskRepository injection and TaskService
 def5678 feat(ui-tests): add 5 UI tests for task list, creation, deletion, search, and validation
-ghi9012 feat(ui): add TaskListViewController with accessibility identifiers for UI testing
-jkl3456 feat(tests): add unit tests for Task model and TaskManager (15 tests)
-mno7890 feat: add Task model and TaskManager business logic
+ghi9012 feat(ui): add accessibility identifiers and search to TaskListViewController
+jkl3456 feat(tests): add unit tests for TaskItem model and TaskManager (15 tests)
+mno7890 feat: add TaskManager business logic
 ```
 
 ---
@@ -1351,7 +1247,7 @@ mno7890 feat: add Task model and TaskManager business logic
 
 1. Verifica que cada `accessibilityIdentifier` en el ViewController coincida **exactamente** (case-sensitive) con el string usado en la prueba. Por ejemplo, `"taskTableView"` en la app debe coincidir con `app.tables["taskTableView"]` en la prueba.
 2. Usa `waitForExistence(timeout: 5)` antes de interactuar con cualquier elemento para dar tiempo a que la UI se cargue.
-3. Si la app no precarga datos de ejemplo, verifica que `app.launchArguments.append("-UITesting")` esté presente en `setUp()` y que el ViewController lo lea con `ProcessInfo.processInfo.arguments.contains("-UITesting")`.
+3. Si la app no precarga datos de ejemplo, verifica que `app.launchArguments.append("-UITesting")` esté presente en `setUp()` y que `AppConfiguration.makeRepository(modelContext:)` lo lea con `ProcessInfo.processInfo.arguments.contains("-UITesting")` (Paso 6).
 4. Para depurar, agrega un breakpoint en la prueba de UI y usa `po app.debugDescription` en la consola LLDB para ver la jerarquía completa de elementos accesibles.
 
 ---
@@ -1371,15 +1267,32 @@ git status
 
 ---
 
+## Reto Opcional (KMP) — Pruebas en commonTest
+
+> Este reto es **opcional** y no forma parte de la evaluación. Se trabaja sobre el proyecto KMP de los labs anteriores.
+
+**Objetivo:** Probar el repositorio compartido en `commonTest` con kotlin.test, de modo que las mismas pruebas corran en Android y en iOS.
+
+**Instrucciones:**
+
+1. Agrega `kotlin("test")` y `kotlinx-coroutines-test` a las dependencias de `commonTest`.
+2. Crea un `FakeTareasRepositorio` que implemente la interfaz `TareasRepositorio` con una lista en memoria (en código compartido no se pueden usar bibliotecas de mocks de Android).
+3. Escribe pruebas con `@Test` y `assertEquals` para agregar, listar y eliminar tareas; usa `runTest` para probar funciones `suspend` y `Flow`.
+4. Ejecuta las pruebas con `./gradlew :shared:allTests`.
+
+**Resultado esperado:** las pruebas de `commonTest` pasan en Android y en iOS al ejecutar `./gradlew :shared:allTests`.
+
+---
+
 ## Resumen
 
 En esta práctica incremental de 180 minutos completaste las tres fases del cierre del curso:
 
 | Fase | Logro | Archivos Creados |
 |---|---|---|
-| **Fase 1 — Unit Testing** | 20 pruebas unitarias con XCTestCase, patrón AAA, `setUp`/`tearDown` | `TaskModelTests.swift`, `TaskManagerTests.swift`, `TaskRepositoryTests.swift` |
+| **Fase 1 — Unit Testing** | 15 pruebas unitarias con XCTestCase, patrón AAA, `setUp`/`tearDown` (20 con las del repositorio de la Fase 3) | `TaskManager.swift`, `TaskModelTests.swift`, `TaskManagerTests.swift` |
 | **Fase 2 — UI Testing** | 5 pruebas de interfaz con XCUITest, accessibility identifiers, simulación de interacciones | `TaskManagerUITests.swift`, `TaskListViewController.swift` actualizado |
-| **Fase 3 — Refactorización SOLID** | 3 violaciones identificadas y corregidas (SRP, DIP, ISP), cobertura ≥ 70 % | `TaskService.swift`, `TaskRepositoryProtocol.swift`, `InMemoryTaskRepository.swift`, `REFACTORING_LOG.md` |
+| **Fase 3 — Refactorización SOLID** | 3 violaciones identificadas (SRP, DIP, ISP); SRP y DIP corregidas, ISP documentada con su solución, cobertura ≥ 70 % | `TaskManager.swift` (refactorizado), `TaskService.swift`, `TaskRepositoryTests.swift`, `REFACTORING_LOG.md` |
 
 **Conceptos clave aplicados:**
 
@@ -1389,8 +1302,8 @@ En esta práctica incremental de 180 minutos completaste las tres fases del cier
 - **`XCTAssertEqual`**, **`XCTAssertThrowsError`**, **`XCTAssertNil`**, **`XCTAssertTrue`** para cubrir diferentes escenarios de validación.
 - **`XCUIApplication`**, **`XCUIElement`** y **accessibility identifiers** para localizar y manipular elementos de UI.
 - **Principio de Responsabilidad Única (SRP):** Extraer `TaskService` del ViewController.
-- **Principio de Inversión de Dependencias (DIP):** Crear `TaskRepositoryProtocol` e inyectar implementaciones.
-- **Code Coverage** como métrica objetiva de calidad de las pruebas.
+- **Principio de Inversión de Dependencias (DIP):** Inyectar en `TaskManager` el protocolo `TaskRepository` del Lab 02 en lugar de un array concreto.
+- **Code Coverage** como métrica objetivo de calidad de las pruebas.
 - **Commits convencionales** (`feat:`, `refactor:`) para documentar la evolución del proyecto.
 
 ### Recursos Adicionales
