@@ -62,7 +62,7 @@ Actividad de cierre indicada en el temario. El repositorio no contiene una guía
 
 ## Anexo KMP
 
-### [Retos Opcionales (KMP) por capítulo](Anexo%20KMP/README.md)
+### [Retos Opcionales (KMP) por capítulo](AnexoKMP/README.md)
 
 - Descripción: Extender los conceptos del curso mediante Kotlin Multiplatform, compartiendo modelos, interfaces, persistencia, servicios de red, lógica reactiva y pruebas entre plataformas.
 - Requisitos adicionales: Android Studio con el plugin Kotlin Multiplatform, además de Xcode.
