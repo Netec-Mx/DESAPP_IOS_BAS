@@ -10,13 +10,13 @@
 
 ## 2. Descripción General
 
-En este laboratorio reemplazarás el `InMemoryTaskRepository` construido en el Lab 02 con tres implementaciones de persistencia real: **UserDefaults** para preferencias del usuario, **Core Data** para un repositorio relacional completo y **SwiftData** como alternativa moderna declarativa. Al finalizar, dispondrás de un `enum RepositoryType` que permite conmutar entre las tres implementaciones, y habrás seleccionado SwiftData como repositorio principal de producción. Todo el trabajo se realizará en la rama `feature/persistence` y se integrará a `develop`.
+En este laboratorio reemplazarás el `InMemoryTaskRepository` construido en el Lab 01 con tres implementaciones de persistencia real: **UserDefaults** para preferencias del usuario, **Core Data** para un repositorio relacional completo y **SwiftData** como alternativa moderna declarativa. Al finalizar, dispondrás de un `enum RepositoryType` que permite conmutar entre las tres implementaciones, y habrás seleccionado SwiftData como repositorio principal de producción. Todo el trabajo se realizará en la rama `feature/persistence` y se integrará a `develop`.
 
 ## 3. Objetivos de Aprendizaje
 
 - [ ] Implementar un servicio `UserPreferencesService` que persista preferencias de usuario (tema de color, ordenamiento, filtro de tareas completadas) usando `UserDefaults`.
 - [ ] Construir un stack de Core Data completo con entidad `TaskEntity`, `NSPersistentContainer` y un `CoreDataTaskRepository` que conforme el protocolo `TaskRepository`.
-- [ ] Crear un modelo `@Model TaskItem` con SwiftData e implementar `SwiftDataTaskRepository` usando `ModelContainer` y `ModelContext`.
+- [ ] Crear un modelo `@Model SDTaskItem` con SwiftData e implementar `SwiftDataTaskRepository` usando `ModelContainer` y `ModelContext`.
 - [ ] Comparar las tres tecnologías de persistencia y configurar un mecanismo de selección (`RepositoryType`) que permita cambiar la implementación activa.
 - [ ] Gestionar el flujo Git completo: rama `feature/persistence`, commits con Conventional Commits y merge a `develop`.
 
@@ -240,7 +240,7 @@ final class UserPreferencesService {
 
 **Salida esperada:** El archivo compila sin errores.
 
-**Verificación:** Compila con **⌘ B**. Verifica que `UserPreferencesService.shared.sortOrder` devuelve `.createdAtDescending` por defecto añadiendo temporalmente un `print` en `AppDelegate` o en el `init` de tu `App` struct (elimínalo después de verificar).
+**Verificación:** Compila con **⌘ B**. Verifica que `UserPreferencesService.shared.sortOrder` devuelve `.createdAtDescending` por defecto añadiendo temporalmente un `print` en `application(_:didFinishLaunchingWithOptions:)` de `AppDelegate` (elimínalo después de verificar).
 
 ---
 
@@ -343,11 +343,12 @@ struct PreferencesView: View {
 
 **Instrucciones:**
 
-1. En tu vista principal de SwiftUI (por ejemplo, `TaskListView` o `ContentView`), añade un botón de navegación a preferencias en la toolbar:
+1. En la vista SwiftUI `TaskListView` del Lab 02, añade un botón de navegación a preferencias dentro del `.toolbar` existente (junto al botón **+**):
 
 ```swift
 .toolbar {
-    ToolbarItem(placement: .navigationBarTrailing) {
+    // ... ToolbarItem del botón "+" del Lab 02 ...
+    ToolbarItem(placement: .navigationBarLeading) {
         NavigationLink(destination: PreferencesView()) {
             Image(systemName: "gearshape")
                 .accessibilityLabel("Preferencias")
@@ -356,17 +357,23 @@ struct PreferencesView: View {
 }
 ```
 
-2. Si usas UIKit con un `UINavigationController`, añade un `UIBarButtonItem` que presente `PreferencesView` dentro de un `UIHostingController`:
+2. En la interfaz UIKit, abre `UIKitViews/TaskListViewController.swift` (Lab 02). Agrega `import SwiftUI` si no lo tiene y reemplaza `configureNavigationBar()` para que la barra muestre el botón **+** y el de preferencias (si asignaras solo `rightBarButtonItem`, el engranaje reemplazaría al **+**):
 
 ```swift
-// En tu UIKit ViewController — viewDidLoad()
-let gearButton = UIBarButtonItem(
-    image: UIImage(systemName: "gearshape"),
-    style: .plain,
-    target: self,
-    action: #selector(openPreferences)
-)
-navigationItem.rightBarButtonItem = gearButton
+private func configureNavigationBar() {
+    let addButton = UIBarButtonItem(
+        barButtonSystemItem: .add,
+        target: self,
+        action: #selector(addTaskTapped)
+    )
+    let gearButton = UIBarButtonItem(
+        image: UIImage(systemName: "gearshape"),
+        style: .plain,
+        target: self,
+        action: #selector(openPreferences)
+    )
+    navigationItem.rightBarButtonItems = [addButton, gearButton]
+}
 
 @objc private func openPreferences() {
     let preferencesVC = UIHostingController(rootView: PreferencesView())
@@ -569,50 +576,52 @@ final class CoreDataStack {
 
 **Instrucciones:**
 
-1. Primero, verifica que tu protocolo `TaskRepository` del Lab 02 tiene esta forma (o similar). Si difiere, adapta los nombres de método. Referencia esperada:
+1. Verifica que tu protocolo `TaskRepository` es el que dejaste en el Lab 02 (sin `mutating`). Los tres repositorios de este lab (Core Data, SwiftData y el de memoria) implementan exactamente estos métodos:
 
 ```swift
-// TaskRepository.swift (ya existente del Lab 02)
-import Foundation
-
+// Services/TaskRepository.swift (versión del Lab 02)
 protocol TaskRepository {
     func fetchAll() -> [TaskItem]
+    func fetchById(_ id: UUID) -> TaskItem?
     func add(_ task: TaskItem)
-    func update(_ task: TaskItem)
-    func delete(id: UUID)
+    @discardableResult func update(_ task: TaskItem) -> Bool
+    @discardableResult func delete(byId id: UUID) -> Bool
+    func filter(where predicate: (TaskItem) -> Bool) -> [TaskItem]
 }
 ```
 
-> **Importante:** Si en tu Lab 02 el modelo se llama `Task` en lugar de `TaskItem`, usa el nombre que tengas. En este lab usaremos `TaskItem` para evitar conflictos con `Swift.Task` (concurrencia). Si necesitas renombrar, hazlo ahora globalmente con **Edit → Find and Replace in Workspace**.
+> **Importante:** Desde el Lab 01 el modelo de dominio se llama `TaskItem` (y no `Task`) para evitar conflictos con `Swift.Task` (concurrencia). No modifiques `TaskItem.swift`: este lab usa el struct del Lab 01 tal como está (`taskDescription` opcional, `priority`, `dueDate`, `createdAt`).
 
-2. Asegúrate de que tu modelo `TaskItem` (struct del Lab 02) tiene al menos estas propiedades:
+2. El inicializador del Lab 01 genera un `id` y un `createdAt` nuevos cada vez. Para reconstruir una tarea leída de la base de datos hay que conservar los valores guardados, así que agrega un inicializador completo en una **extensión** (así el inicializador original sigue disponible). Crea `Models/TaskItem+Persistence.swift`:
 
 ```swift
-// TaskItem.swift (ya existente, verificar)
+// TaskItem+Persistence.swift
 import Foundation
 
-struct TaskItem: Identifiable, Equatable {
-    let id: UUID
-    var title: String
-    var taskDescription: String
-    var isCompleted: Bool
-    var createdAt: Date
-
+extension TaskItem {
+    /// Reconstruye una tarea con todos sus valores guardados.
+    /// Lo usan los repositorios de Core Data y SwiftData.
     init(
-        id: UUID = UUID(),
+        id: UUID,
         title: String,
-        taskDescription: String = "",
-        isCompleted: Bool = false,
-        createdAt: Date = Date()
+        taskDescription: String?,
+        isCompleted: Bool,
+        priority: Priority,
+        createdAt: Date,
+        dueDate: Date?
     ) {
         self.id = id
         self.title = title
         self.taskDescription = taskDescription
         self.isCompleted = isCompleted
+        self.priority = priority
         self.createdAt = createdAt
+        self.dueDate = dueDate
     }
 }
 ```
+
+> **Nota:** Un inicializador declarado en una extensión de un struct puede asignar las propiedades `let` (`id`, `createdAt`) y no reemplaza al inicializador del Lab 01.
 
 3. Dentro del grupo `CoreData`, crea `CoreDataTaskRepository.swift`:
 
@@ -646,9 +655,11 @@ final class CoreDataTaskRepository: TaskRepository {
                 TaskItem(
                     id: entity.id ?? UUID(),
                     title: entity.title ?? "",
-                    taskDescription: entity.taskDescription ?? "",
+                    taskDescription: entity.taskDescription,
                     isCompleted: entity.isCompleted,
-                    createdAt: entity.createdAt ?? Date()
+                    priority: .medium,      // la entidad TaskEntity no guarda prioridad
+                    createdAt: entity.createdAt ?? Date(),
+                    dueDate: nil            // ni fecha límite (ver nota al final del paso)
                 )
             }
         } catch {
@@ -668,41 +679,55 @@ final class CoreDataTaskRepository: TaskRepository {
         coreDataStack.saveContext()
     }
 
+    // MARK: - Fetch by ID
+    func fetchById(_ id: UUID) -> TaskItem? {
+        fetchAll().first { $0.id == id }
+    }
+
     // MARK: - Update
-    func update(_ task: TaskItem) {
+    @discardableResult
+    func update(_ task: TaskItem) -> Bool {
         let request: NSFetchRequest<TaskEntity> = TaskEntity.fetchRequest()
         request.predicate = NSPredicate(format: "id == %@", task.id as CVarArg)
 
         do {
-            let results = try context.fetch(request)
-            if let entity = results.first {
-                entity.title = task.title
-                entity.taskDescription = task.taskDescription
-                entity.isCompleted = task.isCompleted
-                coreDataStack.saveContext()
-            }
+            guard let entity = try context.fetch(request).first else { return false }
+            entity.title = task.title
+            entity.taskDescription = task.taskDescription
+            entity.isCompleted = task.isCompleted
+            coreDataStack.saveContext()
+            return true
         } catch {
             print("Error al actualizar tarea en Core Data: \(error)")
+            return false
         }
     }
 
     // MARK: - Delete
-    func delete(id: UUID) {
+    @discardableResult
+    func delete(byId id: UUID) -> Bool {
         let request: NSFetchRequest<TaskEntity> = TaskEntity.fetchRequest()
         request.predicate = NSPredicate(format: "id == %@", id as CVarArg)
 
         do {
-            let results = try context.fetch(request)
-            if let entity = results.first {
-                context.delete(entity)
-                coreDataStack.saveContext()
-            }
+            guard let entity = try context.fetch(request).first else { return false }
+            context.delete(entity)
+            coreDataStack.saveContext()
+            return true
         } catch {
             print("Error al eliminar tarea de Core Data: \(error)")
+            return false
         }
+    }
+
+    // MARK: - Filter
+    func filter(where predicate: (TaskItem) -> Bool) -> [TaskItem] {
+        fetchAll().filter(predicate)
     }
 }
 ```
+
+> **Nota:** La entidad `TaskEntity` de este lab guarda solo los campos básicos; al leer, `priority` toma `.medium` y `dueDate` queda en `nil`. SwiftData (Parte 3) sí guarda todos los campos y será el repositorio de producción. Como ejercicio, puedes agregar a la entidad los atributos `dueDate` (Date, opcional) y `priorityRaw` (Integer 16).
 
 4. Guarda con **⌘ S** y compila con **⌘ B**.
 
@@ -718,12 +743,11 @@ final class CoreDataTaskRepository: TaskRepository {
 
 **Instrucciones:**
 
-1. Temporalmente, en tu vista principal o ViewModel, reemplaza el repositorio en uso por `CoreDataTaskRepository()`:
+1. Temporalmente, en `UIKitViews/TaskListViewController.swift` (Lab 02), reemplaza el repositorio en uso por `CoreDataTaskRepository()`:
 
 ```swift
-// Ejemplo en un ViewModel existente
 // Antes:
-// private let repository: TaskRepository = InMemoryTaskRepository()
+// private let repository: TaskRepository = InMemoryTaskRepository(seedSampleData: true)
 // Después:
 private let repository: TaskRepository = CoreDataTaskRepository()
 ```
@@ -748,7 +772,7 @@ private let repository: TaskRepository = CoreDataTaskRepository()
 
 **Verificación:** Tras cada relanzamiento, la lista refleja exactamente el estado guardado.
 
-9. **Revierte** el cambio temporal del ViewModel (vuelve a `InMemoryTaskRepository` por ahora). Lo configuraremos con el selector en el paso final.
+9. **Revierte** el cambio temporal de `TaskListViewController` (vuelve a `InMemoryTaskRepository(seedSampleData: true)` por ahora). Lo configuraremos con el selector en el paso final.
 
 ---
 
@@ -786,26 +810,38 @@ final class SDTaskItem {
     @Attribute(.unique) var id: UUID
     var title: String
     var taskDescription: String
+    var dueDate: Date?
+    var priorityRaw: Int          // SwiftData guarda el rawValue del enum
     var isCompleted: Bool
     var createdAt: Date
+
+    /// Prioridad tipada; propiedad calculada, SwiftData no la almacena.
+    var priority: Priority {
+        get { Priority(rawValue: priorityRaw) ?? .medium }
+        set { priorityRaw = newValue.rawValue }
+    }
 
     init(
         id: UUID = UUID(),
         title: String,
         taskDescription: String = "",
+        dueDate: Date? = nil,
+        priority: Priority = .medium,
         isCompleted: Bool = false,
         createdAt: Date = Date()
     ) {
         self.id = id
         self.title = title
         self.taskDescription = taskDescription
+        self.dueDate = dueDate
+        self.priorityRaw = priority.rawValue
         self.isCompleted = isCompleted
         self.createdAt = createdAt
     }
 }
 ```
 
-> **Nota:** Usamos el prefijo `SD` para evitar conflictos de nombre con la struct `TaskItem` existente. El `@Attribute(.unique)` garantiza que no se dupliquen registros por `id`.
+> **Nota:** En `SDTaskItem`, `taskDescription` es `String` (vacío si no hay descripción); en `TaskItem` es `String?`. Las funciones de conversión hacen ese ajuste. Usamos el prefijo `SD` para evitar conflictos de nombre con la struct `TaskItem` existente. A partir de aquí, el proyecto tiene dos tipos con roles distintos: `TaskItem` es el modelo de dominio (lo usan los repositorios, la red y las pruebas) y `SDTaskItem` es el modelo de persistencia (lo usan `@Query`, `ModelContext` y `.modelContainer`). Los Labs 04 y 05 siguen esta misma regla. El `@Attribute(.unique)` garantiza que no se dupliquen registros por `id`.
 
 3. Añade un método de conveniencia para convertir entre `SDTaskItem` y `TaskItem`:
 
@@ -814,21 +850,38 @@ final class SDTaskItem {
 import Foundation
 
 extension SDTaskItem {
+    /// Crea el modelo SwiftData a partir de la struct TaskItem del dominio.
+    convenience init(from task: TaskItem) {
+        self.init(
+            id: task.id,
+            title: task.title,
+            taskDescription: task.taskDescription ?? "",
+            dueDate: task.dueDate,
+            priority: task.priority,
+            isCompleted: task.isCompleted,
+            createdAt: task.createdAt
+        )
+    }
+
     /// Convierte el modelo SwiftData a la struct TaskItem del dominio.
     func toTaskItem() -> TaskItem {
         TaskItem(
             id: id,
             title: title,
-            taskDescription: taskDescription,
+            taskDescription: taskDescription.isEmpty ? nil : taskDescription,
             isCompleted: isCompleted,
-            createdAt: createdAt
+            priority: priority,
+            createdAt: createdAt,
+            dueDate: dueDate
         )
     }
 
     /// Actualiza las propiedades desde una struct TaskItem.
     func update(from task: TaskItem) {
         title = task.title
-        taskDescription = task.taskDescription
+        taskDescription = task.taskDescription ?? ""
+        dueDate = task.dueDate
+        priority = task.priority
         isCompleted = task.isCompleted
     }
 }
@@ -842,60 +895,49 @@ extension SDTaskItem {
 
 ---
 
-#### Paso 13: Configurar el `ModelContainer` en el punto de entrada de la app
+#### Paso 13: Configurar el `ModelContainer` compartido
 
-**Objetivo:** Registrar el contenedor de SwiftData para que esté disponible en toda la jerarquía de vistas SwiftUI.
+**Objetivo:** Crear un único contenedor de SwiftData para toda la app y ponerlo a disposición de UIKit y de las vistas SwiftUI.
 
 **Instrucciones:**
 
-1. Abre el archivo del punto de entrada de tu app SwiftUI (por ejemplo, `TaskManagerAppApp.swift` o `TaskManagerApp.swift`):
+1. `TaskManagerApp` usa el ciclo de vida de UIKit desde el Lab 01 (`AppDelegate` con `@main`). **No crees** una estructura `App` de SwiftUI con `@main`: el proyecto tendría dos puntos de entrada y no compilaría. En su lugar, dentro del grupo `SwiftDataModel`, crea `AppModelContainer.swift`:
 
 ```swift
-// TaskManagerAppApp.swift
-import SwiftUI
+// AppModelContainer.swift
 import SwiftData
 
-@main
-struct TaskManagerAppApp: App {
-
-    init() {
-        // Registrar preferencias por defecto
-        UserDefaults.standard.register(defaults: [
-            "userPref_sortOrder":          SortOrder.createdAtDescending.rawValue,
-            "userPref_colorTheme":         ColorTheme.system.rawValue,
-            "userPref_showCompletedTasks": true
-        ])
-    }
-
-    var body: some Scene {
-        WindowGroup {
-            ContentView()
+/// Contenedor único de SwiftData para toda la app (almacenamiento en disco).
+enum AppModelContainer {
+    static let shared: ModelContainer = {
+        do {
+            return try ModelContainer(for: SDTaskItem.self)
+        } catch {
+            fatalError("No se pudo crear el ModelContainer: \(error)")
         }
-        .modelContainer(for: SDTaskItem.self)
-    }
+    }()
 }
 ```
 
-> **Importante:** `.modelContainer(for: SDTaskItem.self)` crea automáticamente un `ModelContainer` con almacenamiento en disco y lo inyecta en el entorno de SwiftUI. Todas las vistas hijas pueden acceder a `@Environment(\.modelContext)`.
-
-2. Si tu app usa `UIApplicationDelegate` (UIKit lifecycle), configura el contenedor en el `AppDelegate` o `SceneDelegate`:
+2. Abre `AppDelegate.swift` y, en `application(_:didFinishLaunchingWithOptions:)`, registra las preferencias por defecto de la Parte 1 (antes del `return true`):
 
 ```swift
-// Solo si usas UIKit lifecycle
-import SwiftData
-
-// En scene(_:willConnectTo:options:)
-let container = try! ModelContainer(for: SDTaskItem.self)
-let contentView = ContentView()
-    .modelContainer(container)
-window.rootViewController = UIHostingController(rootView: contentView)
+UserDefaults.standard.register(defaults: [
+    "userPref_sortOrder":          SortOrder.createdAtDescending.rawValue,
+    "userPref_colorTheme":         ColorTheme.system.rawValue,
+    "userPref_showCompletedTasks": true
+])
 ```
 
-3. Guarda y compila (**⌘ B**).
+3. Cada vez que muestres una vista SwiftUI que use SwiftData desde UIKit, aplica el contenedor con `.modelContainer(AppModelContainer.shared)` antes de envolverla en un `UIHostingController`. Lo harás en el Paso 15.
+
+> **Importante:** `.modelContainer(...)` inyecta el contenedor en el entorno de SwiftUI; así las vistas hijas pueden usar `@Query` y `@Environment(\.modelContext)`. Para código UIKit (o para los repositorios) usa `AppModelContainer.shared.mainContext`.
+
+4. Guarda y compila (**⌘ B**).
 
 **Salida esperada:** Compilación exitosa.
 
-**Verificación:** Ejecuta la app (**⌘ R**). No debe haber crashes al iniciar. Si ves un error `Failed to find a currently active container`, revisa que `.modelContainer` esté aplicado en el nivel correcto de la jerarquía de vistas.
+**Verificación:** Ejecuta la app (**⌘ R**). No debe haber crashes al iniciar. Si más adelante ves el error `Failed to find a currently active container`, revisa que la vista SwiftUI tenga aplicado `.modelContainer(AppModelContainer.shared)`.
 
 ---
 
@@ -936,50 +978,55 @@ final class SwiftDataTaskRepository: TaskRepository {
 
     // MARK: - Add
     func add(_ task: TaskItem) {
-        let sdItem = SDTaskItem(
-            id: task.id,
-            title: task.title,
-            taskDescription: task.taskDescription,
-            isCompleted: task.isCompleted,
-            createdAt: task.createdAt
-        )
+        let sdItem = SDTaskItem(from: task)
         modelContext.insert(sdItem)
         saveContext()
     }
 
-    // MARK: - Update
-    func update(_ task: TaskItem) {
-        let predicate = #Predicate<SDTaskItem> { $0.id == task.id }
-        let descriptor = FetchDescriptor<SDTaskItem>(predicate: predicate)
+    // MARK: - Fetch by ID
+    func fetchById(_ id: UUID) -> TaskItem? {
+        findItem(id: id)?.toTaskItem()
+    }
 
-        do {
-            let results = try modelContext.fetch(descriptor)
-            if let sdItem = results.first {
-                sdItem.update(from: task)
-                saveContext()
-            }
-        } catch {
-            print("Error al actualizar tarea en SwiftData: \(error)")
-        }
+    // MARK: - Update
+    @discardableResult
+    func update(_ task: TaskItem) -> Bool {
+        guard let sdItem = findItem(id: task.id) else { return false }
+        sdItem.update(from: task)
+        saveContext()
+        return true
     }
 
     // MARK: - Delete
-    func delete(id: UUID) {
-        let predicate = #Predicate<SDTaskItem> { $0.id == id }
-        let descriptor = FetchDescriptor<SDTaskItem>(predicate: predicate)
+    @discardableResult
+    func delete(byId id: UUID) -> Bool {
+        guard let sdItem = findItem(id: id) else { return false }
+        modelContext.delete(sdItem)
+        saveContext()
+        return true
+    }
 
-        do {
-            let results = try modelContext.fetch(descriptor)
-            if let sdItem = results.first {
-                modelContext.delete(sdItem)
-                saveContext()
-            }
-        } catch {
-            print("Error al eliminar tarea de SwiftData: \(error)")
-        }
+    // MARK: - Filter
+    func filter(where predicate: (TaskItem) -> Bool) -> [TaskItem] {
+        fetchAll().filter(predicate)
     }
 
     // MARK: - Private
+    /// Busca el registro SwiftData por id. La variable local con tipo explícito
+    /// evita el error "Type of expression is ambiguous" del macro #Predicate.
+    private func findItem(id: UUID) -> SDTaskItem? {
+        let targetID: UUID = id
+        let descriptor = FetchDescriptor<SDTaskItem>(
+            predicate: #Predicate { $0.id == targetID }
+        )
+        do {
+            return try modelContext.fetch(descriptor).first
+        } catch {
+            print("Error al buscar tarea en SwiftData: \(error)")
+            return nil
+        }
+    }
+
     private func saveContext() {
         do {
             try modelContext.save()
@@ -1145,9 +1192,21 @@ struct SwiftDataTaskListView: View {
 }
 ```
 
-2. Guarda y compila (**⌘ B**).
+2. Para abrir esta vista desde la app UIKit, agrega en `TaskListViewController.swift` una acción (por ejemplo, conectada a un nuevo `UIBarButtonItem` "SwiftData" en el Storyboard, igual que el botón "SwiftUI" del Lab 02):
 
-3. Ejecuta en el simulador (**⌘ R**). Añade tareas, márcalas como completadas, elimina alguna. Detén y relanza para verificar persistencia.
+```swift
+@IBAction func showSwiftDataTapped(_ sender: UIBarButtonItem) {
+    let view = SwiftDataTaskListView()
+        .modelContainer(AppModelContainer.shared)
+    let hostingController = UIHostingController(rootView: view)
+    hostingController.title = "SwiftData"
+    navigationController?.pushViewController(hostingController, animated: true)
+}
+```
+
+3. Guarda y compila (**⌘ B**).
+
+4. Ejecuta en el simulador (**⌘ R**), toca **SwiftData**, añade tareas, márcalas como completadas y elimina alguna. Detén y relanza para verificar persistencia.
 
 **Salida esperada:** La lista muestra las tareas almacenadas en SwiftData. Los cambios persisten entre relanzamientos. La vista `#Preview` funciona con un contenedor en memoria.
 
@@ -1203,22 +1262,19 @@ final class AppConfiguration {
     private init() {}
 
     /// Crea una instancia de TaskRepository según la configuración activa.
-    /// - Parameter modelContext: Requerido solo cuando `activeRepository == .swiftData`.
+    /// - Parameter modelContext: Contexto de SwiftData; si no se pasa, se usa
+    ///   el contexto principal del contenedor compartido (Paso 13).
+    @MainActor
     func makeRepository(modelContext: ModelContext? = nil) -> TaskRepository {
         switch activeRepository {
         case .inMemory:
-            return InMemoryTaskRepository()
+            return InMemoryTaskRepository(seedSampleData: true)
 
         case .coreData:
             return CoreDataTaskRepository()
 
         case .swiftData:
-            guard let context = modelContext else {
-                fatalError(
-                    "SwiftData requiere un ModelContext. " +
-                    "Pasa el modelContext del entorno al crear el repositorio."
-                )
-            }
+            let context = modelContext ?? AppModelContainer.shared.mainContext
             return SwiftDataTaskRepository(modelContext: context)
         }
     }
@@ -1233,131 +1289,60 @@ final class AppConfiguration {
 
 ---
 
-#### Paso 18: Actualizar el ViewModel para usar `AppConfiguration`
+#### Paso 18: Usar `AppConfiguration` en `TaskListViewController`
 
-**Objetivo:** Modificar el ViewModel principal para que obtenga su repositorio desde `AppConfiguration`.
+**Objetivo:** Hacer que la lista principal (UIKit, del Lab 02) obtenga su repositorio desde `AppConfiguration` y aplique las preferencias de `UserDefaults`. Como el botón "SwiftUI" del Lab 02 pasa este mismo repositorio a `TaskListView`, ambas interfaces usarán la persistencia elegida.
 
 **Instrucciones:**
 
-1. Abre tu ViewModel principal (por ejemplo, `TaskListViewModel.swift`). Modifícalo para aceptar un `TaskRepository` inyectado:
+1. Abre `UIKitViews/TaskListViewController.swift` y reemplaza la declaración del repositorio:
 
 ```swift
-// TaskListViewModel.swift
-import Foundation
-import Combine
+// Antes (Lab 02):
+// private let repository: TaskRepository = InMemoryTaskRepository(seedSampleData: true)
 
-final class TaskListViewModel: ObservableObject {
+// Después:
+private lazy var repository: TaskRepository = AppConfiguration.shared.makeRepository()
+```
 
-    @Published var tasks: [TaskItem] = []
+> **Nota:** Se usa `lazy var` para que el repositorio se cree la primera vez que se usa (ya en el hilo principal), no al construir el controlador desde el Storyboard.
 
-    private let repository: TaskRepository
+2. En el mismo archivo, reemplaza `loadTasks()` para aplicar el filtro y el orden guardados en `UserPreferencesService` (Parte 1):
 
-    init(repository: TaskRepository) {
-        self.repository = repository
-        loadTasks()
+```swift
+private func loadTasks() {
+    var result = repository.fetchAll()
+
+    // Filtro de preferencias
+    let prefs = UserPreferencesService.shared
+    if !prefs.showCompletedTasks {
+        result = result.filter { !$0.isCompleted }
     }
 
-    func loadTasks() {
-        tasks = repository.fetchAll()
-
-        // Aplicar filtro de preferencias
-        let prefs = UserPreferencesService.shared
-        if !prefs.showCompletedTasks {
-            tasks = tasks.filter { !$0.isCompleted }
-        }
-
-        // Aplicar ordenamiento de preferencias
-        switch prefs.sortOrder {
-        case .createdAtAscending:
-            tasks.sort { $0.createdAt < $1.createdAt }
-        case .createdAtDescending:
-            tasks.sort { $0.createdAt > $1.createdAt }
-        case .titleAscending:
-            tasks.sort { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
-        case .titleDescending:
-            tasks.sort { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedDescending }
-        }
+    // Ordenamiento de preferencias
+    switch prefs.sortOrder {
+    case .createdAtAscending:
+        result.sort { $0.createdAt < $1.createdAt }
+    case .createdAtDescending:
+        result.sort { $0.createdAt > $1.createdAt }
+    case .titleAscending:
+        result.sort { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
+    case .titleDescending:
+        result.sort { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedDescending }
     }
 
-    func addTask(title: String, description: String = "") {
-        let task = TaskItem(title: title, taskDescription: description)
-        repository.add(task)
-        loadTasks()
-    }
-
-    func toggleCompletion(for task: TaskItem) {
-        var updated = task
-        updated.isCompleted.toggle()
-        repository.update(updated)
-        loadTasks()
-    }
-
-    func deleteTask(id: UUID) {
-        repository.delete(id: id)
-        loadTasks()
-    }
+    tasks = result
+    tableView.reloadData()
 }
 ```
 
-2. En la vista SwiftUI que crea el ViewModel, inyecta el repositorio usando el entorno:
+3. No hace falta cambiar nada más: `prepare(for:sender:)` y `showSwiftUITapped(_:)` ya pasan `repository` a las demás pantallas.
 
-```swift
-// Ejemplo en ContentView.swift o la vista que instancie el ViewModel
-import SwiftUI
-import SwiftData
-
-struct TaskListContainerView: View {
-
-    @Environment(\.modelContext) private var modelContext
-
-    @StateObject private var viewModel: TaskListViewModel
-
-    init() {
-        // Placeholder — se configura en onAppear
-        _viewModel = StateObject(wrappedValue: TaskListViewModel(
-            repository: InMemoryTaskRepository()
-        ))
-    }
-
-    var body: some View {
-        TaskListContentView(viewModel: viewModel)
-            .onAppear {
-                let repo = AppConfiguration.shared.makeRepository(
-                    modelContext: modelContext
-                )
-                // Reemplazar repositorio si es necesario
-                // Nota: Para una arquitectura más limpia, considera usar
-                // un factory pattern en el nivel de la App struct.
-            }
-    }
-}
-```
-
-> **Alternativa más limpia:** Si prefieres evitar la complejidad de reconfigurar el ViewModel después de `onAppear`, puedes crear el ViewModel directamente en la `App` struct pasando el `ModelContext`:
-
-```swift
-// Patrón recomendado: crear el ViewModel en el nivel de App
-// usando un wrapper que tenga acceso al modelContext
-
-struct RootView: View {
-    @Environment(\.modelContext) private var modelContext
-
-    var body: some View {
-        let repository = AppConfiguration.shared.makeRepository(modelContext: modelContext)
-        let viewModel = TaskListViewModel(repository: repository)
-
-        // Usar .id() para forzar recreación si cambia la config
-        TaskListMainView(viewModel: viewModel)
-            .id(AppConfiguration.shared.activeRepository)
-    }
-}
-```
-
-3. Guarda y compila (**⌘ B**).
+4. Guarda y compila (**⌘ B**).
 
 **Salida esperada:** Compilación exitosa. La app usa el repositorio configurado en `AppConfiguration.shared.activeRepository`.
 
-**Verificación:** Cambia `activeRepository` a `.coreData`, ejecuta, añade una tarea. Cambia a `.swiftData`, ejecuta — la tarea de Core Data no aparece (son stores separados). Cambia de vuelta a `.coreData` — la tarea reaparece. Esto confirma que cada repositorio opera independientemente.
+**Verificación:** Cambia `activeRepository` a `.coreData`, ejecuta, añade una tarea. Cambia a `.swiftData`, ejecuta — la tarea de Core Data no aparece (son stores separados). Cambia de vuelta a `.coreData` — la tarea reaparece. Esto confirma que cada repositorio opera independientemente. Con `.inMemory` verás las 3 tareas de ejemplo del Lab 02 y nada persiste al relanzar.
 
 ---
 
@@ -1546,27 +1531,17 @@ en la línea del `#Predicate`.
 **Causa:** El macro `#Predicate` requiere que la variable capturada sea del mismo tipo exacto que la propiedad del modelo. Si `task.id` es `UUID` pero la variable capturada tiene un tipo inferido diferente, el compilador falla.
 
 **Solución:**
-1. Declara explícitamente el tipo de la variable antes del predicado:
+1. Declara explícitamente el tipo de la variable antes del predicado, como en el método `findItem(id:)` del Paso 14:
 ```swift
-func update(_ task: TaskItem) {
-    let taskID: UUID = task.id  // Tipo explícito
-    let predicate = #Predicate<SDTaskItem> { item in
-        item.id == taskID
-    }
-    let descriptor = FetchDescriptor<SDTaskItem>(predicate: predicate)
-    // ... resto del código
+private func findItem(id: UUID) -> SDTaskItem? {
+    let targetID: UUID = id  // Tipo explícito
+    let descriptor = FetchDescriptor<SDTaskItem>(
+        predicate: #Predicate { $0.id == targetID }
+    )
+    return try? modelContext.fetch(descriptor).first
 }
 ```
-2. Repite el mismo patrón en el método `delete(id:)`:
-```swift
-func delete(id: UUID) {
-    let targetID: UUID = id
-    let predicate = #Predicate<SDTaskItem> { item in
-        item.id == targetID
-    }
-    // ...
-}
-```
+2. Usa `findItem(id:)` en `fetchById(_:)`, `update(_:)` y `delete(byId:)` en lugar de escribir un `#Predicate` en cada método.
 3. Limpia (**⌘ ⇧ K**) y recompila (**⌘ B**).
 
 ---
@@ -1593,6 +1568,24 @@ var activeRepository: RepositoryType = .swiftData
 
 ---
 
+## Reto Opcional (KMP) — Persistencia Compartida con SQLDelight
+
+> Este reto es **opcional** y no forma parte de la evaluación. Se trabaja sobre el proyecto KMP del Lab 01.
+
+**Objetivo:** Guardar las tareas en el módulo `shared` con SQLDelight y mostrarlas en la app iOS.
+
+**Instrucciones:**
+
+1. Agrega el plugin y las dependencias de SQLDelight al `build.gradle.kts` del módulo `shared` (driver de Android y driver nativo para iOS).
+2. Crea el archivo `Tarea.sq` en `shared/src/commonMain/sqldelight` con la tabla de tareas y las consultas para insertar, listar y eliminar.
+3. Implementa `TareasRepositorio` en `commonMain` usando las consultas generadas por SQLDelight.
+4. Crea el driver de cada plataforma con `expect`/`actual` (o con una fábrica de driver por plataforma).
+5. Desde la app iOS, llama al repositorio y muestra la lista de tareas.
+
+**Resultado esperado:** las tareas se guardan con SQLDelight en el módulo `shared`, la app iOS las muestra y se conservan al cerrar y volver a abrir la app.
+
+---
+
 ## 10. Resumen
 
 En este laboratorio implementaste una capa de persistencia completa para `TaskManagerApp`:
@@ -1600,9 +1593,9 @@ En este laboratorio implementaste una capa de persistencia completa para `TaskMa
 | Tecnología | Propósito | Archivos creados |
 |---|---|---|
 | **UserDefaults** | Preferencias del usuario | `UserPreferences.swift`, `UserPreferencesService.swift`, `PreferencesView.swift` |
-| **Core Data** | Repositorio relacional | `TaskManagerApp.xcdatamodeld`, `TaskEntity+CoreDataClass.swift`, `TaskEntity+CoreDataProperties.swift`, `CoreDataStack.swift`, `CoreDataTaskRepository.swift` |
-| **SwiftData** | Repositorio moderno declarativo | `SDTaskItem.swift`, `SDTaskItem+Conversion.swift`, `SwiftDataTaskRepository.swift`, `SwiftDataTaskListView.swift` |
-| **Integración** | Selector de implementación | `AppConfiguration.swift`, `PERSISTENCE_COMPARISON.md` |
+| **Core Data** | Repositorio relacional | `TaskManagerApp.xcdatamodeld`, `TaskEntity+CoreDataClass.swift`, `TaskEntity+CoreDataProperties.swift`, `CoreDataStack.swift`, `CoreDataTaskRepository.swift`, `TaskItem+Persistence.swift` |
+| **SwiftData** | Repositorio moderno declarativo | `SDTaskItem.swift`, `SDTaskItem+Conversion.swift`, `SwiftDataTaskRepository.swift`, `SwiftDataTaskListView.swift`, `AppModelContainer.swift` |
+| **Integración** | Selector de implementación | `AppConfiguration.swift`, `TaskListViewController.swift` (actualizado), `PERSISTENCE_COMPARISON.md` |
 
 **Decisión de arquitectura:** SwiftData fue seleccionado como repositorio principal de producción por su menor boilerplate, integración nativa con SwiftUI (`@Query`) y soporte de predicados type-safe.
 
@@ -1613,3 +1606,28 @@ En este laboratorio implementaste una capa de persistencia completa para `TaskMa
 - [Apple Documentation — SwiftData](https://developer.apple.com/documentation/swiftdata)
 - [WWDC23 — Meet SwiftData](https://developer.apple.com/videos/play/wwdc2023/10187/)
 - [WWDC23 — Build an app with SwiftData](https://developer.apple.com/videos/play/wwdc2023/10154/)
+
+---
+
+## Anexo — Notas sobre la presentación (diapositivas 214 y 215, práctica del Capítulo 3)
+
+Los criterios de la diapositiva 214 siguen siendo válidos para este README. Las notas de abajo aclaran **cómo** se cumple cada uno en el proyecto de los Labs 01–02, y qué falta en el texto del reto KMP. Mientras la diapositiva no se actualice, **manda el contenido de este README**.
+
+| Criterio en la diapositiva 214 | Cómo se cumple en este README | Por qué |
+|---|---|---|
+| **UserDefaults:** `UserPreferencesService`, `SortOrder` y `PreferencesView` | Sin cambios. Las preferencias por defecto se registran en `AppDelegate` (Paso 13). El botón de preferencias se **agrega** junto al **+** con `rightBarButtonItems` (Paso 4). | El proyecto arranca en UIKit desde el Lab 01. Si se asignara solo `rightBarButtonItem`, el engranaje reemplazaría al botón **+**. |
+| **Core Data:** `TaskEntity`, `CoreDataStack` y `CoreDataTaskRepository` con el protocolo `TaskRepository` | El repositorio implementa el protocolo del Lab 02: `fetchAll()`, `fetchById(_:)`, `add(_:)`, `update(_:) -> Bool`, `delete(byId:) -> Bool` y `filter(where:)`. Se agrega `TaskItem+Persistence.swift`, con un inicializador que conserva `id` y `createdAt` (Paso 9). | El inicializador del Lab 01 genera un `id` y una fecha nuevos cada vez, así que no sirve para reconstruir tareas guardadas. |
+| **SwiftData:** `@Model SDTaskItem`, `ModelContainer`, `SwiftDataTaskRepository` y lista con `@Query` | El contenedor es `AppModelContainer.shared` y **no** un `App` de SwiftUI con `@main` (Paso 13). La lista `SwiftDataTaskListView` se abre con un botón **SwiftData** desde la lista UIKit (Paso 15). | El proyecto ya tiene `@main` en `AppDelegate`; con dos puntos de entrada no compila. |
+| *(implícito)* Relación entre los dos modelos | `TaskItem` es el modelo de dominio (`taskDescription` opcional) y `SDTaskItem` es el modelo de persistencia (`taskDescription` no opcional y `priorityRaw`). `init(from:)`, `toTaskItem()` y `update(from:)` convierten entre ambos (Paso 12). | Los Labs 04–06 siguen esta misma regla. |
+| **Integración:** `AppConfiguration` elige la implementación; SwiftData es el repositorio principal | `makeRepository(modelContext:)` usa `AppModelContainer.shared.mainContext` cuando no recibe un contexto. El Paso 18 modifica **`TaskListViewController`** (Lab 02), que obtiene el repositorio con `lazy var repository = AppConfiguration.shared.makeRepository()`. | En ningún lab existe un `TaskListViewModel`. La pantalla principal es el ViewController UIKit del Lab 02, que además pasa el repositorio a la vista SwiftUI. |
+| **Reto opcional (KMP):** "SQLDelight (`Tarea.sq` y un `TareasRepositorio`)" | `TareasRepositorio` se declara como **interfaz** en `commonMain` y se implementa en `SQLDelightTareasRepositorio`. La app iOS depende de la interfaz (ver `Retos_KMP_por_capitulo.md`). | El reto 6 crea un `FakeTareasRepositorio` que implementa esa interfaz, y la diapositiva «SOLID en el Módulo Compartido» muestra el mismo diseño. Si `TareasRepositorio` fuera una clase, el reto 6 no se podría hacer. |
+
+**Reto KMP en la diapositiva 214:**
+
+> **Reto opcional (KMP):** En el proyecto KMP, declara la interfaz `TareasRepositorio` en `commonMain`, impleméntala con SQLDelight (`Tarea.sq` y `SQLDelightTareasRepositorio`) y muestra las tareas en la app iOS.
+
+**Reto KMP en la diapositiva 215 (Resultados esperados):**
+
+> **Reto KMP (opcional):** la interfaz `TareasRepositorio` vive en el módulo `shared`, `SQLDelightTareasRepositorio` guarda las tareas y la app iOS las muestra sin depender de la implementación.
+
+**Resultados esperados (diapositiva 215):** los demás puntos siguen siendo válidos. La lista con `@Query` está en la pantalla **SwiftData**, a la que se llega desde la lista UIKit. Al cambiar `RepositoryType`, cambia el repositorio que usan la lista UIKit y la vista SwiftUI del Lab 02.

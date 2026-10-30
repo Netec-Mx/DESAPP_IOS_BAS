@@ -12,7 +12,7 @@
 
 ## Descripción General
 
-En esta práctica construirás **dos flujos de interfaz de usuario completos y paralelos** para la aplicación TaskManagerApp: uno con **UIKit** (Storyboards, UITableViewController, UINavigationController, Auto Layout) y otro con **SwiftUI** (List, NavigationStack, @State, @Binding). Ambos flujos compartirán la capa de modelo (`Task` y `TaskRepository`) creada en el Lab 01. Trabajarás en una rama Git dedicada (`feature/ui-module`) y realizarás commits atómicos siguiendo Conventional Commits.
+En esta práctica construirás **dos flujos de interfaz de usuario completos y paralelos** para la aplicación TaskManagerApp: uno con **UIKit** (Storyboards, UITableViewController, UINavigationController, Auto Layout) y otro con **SwiftUI** (List, NavigationStack, @State, @Binding). Ambos flujos compartirán la capa de modelo (`TaskItem` y `TaskRepository`) creada en el Lab 01. Trabajarás en una rama Git dedicada (`feature/ui-module`) y realizarás commits atómicos siguiendo Conventional Commits.
 
 ---
 
@@ -24,7 +24,7 @@ Al finalizar este laboratorio serás capaz de:
 - [ ] Implementar navegación jerárquica con `UINavigationController` y segues (show/modal) para la pantalla de detalle y creación de tareas.
 - [ ] Crear una segunda interfaz equivalente usando SwiftUI con `List`, `NavigationStack`, `VStack`, `HStack` y Modifiers.
 - [ ] Gestionar estado en SwiftUI con `@State` y `@Binding` para el formulario de creación de tareas.
-- [ ] Integrar la capa de modelo (`struct Task` y protocolo `TaskRepository`) del Lab 01 con ambas interfaces.
+- [ ] Integrar la capa de modelo (`struct TaskItem` y protocolo `TaskRepository`) del Lab 01 con ambas interfaces.
 
 ---
 
@@ -32,7 +32,7 @@ Al finalizar este laboratorio serás capaz de:
 
 ### Conocimiento
 
-- Lab 01-00-01 completado: proyecto TaskManagerApp con `struct Task`, protocolo `TaskRepository` e `InMemoryTaskRepository`.
+- Lab 01-00-01 completado: proyecto TaskManagerApp con `struct TaskItem`, protocolo `TaskRepository` e `InMemoryTaskRepository`.
 - Rama `develop` activa en el repositorio local con los commits del Lab 01.
 - Conocimiento básico de Auto Layout, Storyboards y vistas SwiftUI (cursos prerrequisito).
 
@@ -118,9 +118,11 @@ El asterisco (`*`) debe estar junto a `feature/ui-module`. Todos los commits de 
 
 ---
 
-## Paso 2 — Verificar el Modelo de Datos del Lab 01
+## Paso 2 — Adaptar el Repositorio del Lab 01 para Compartirlo entre Interfaces
 
-**Objetivo:** Confirmar que los archivos de modelo existen y compilar el proyecto para partir de una base estable.
+> **Nota:** Desde el Lab 01 el modelo se llama `TaskItem` (y no `Task`) para evitar el conflicto con `Swift.Task`, el tipo de Swift Concurrency que usarás en el Lab 04.
+
+**Objetivo:** Reutilizar sin cambios el modelo `TaskItem` del Lab 01 y convertir `InMemoryTaskRepository` en una clase, para que la interfaz UIKit y la interfaz SwiftUI compartan la misma instancia del repositorio.
 
 ### Instrucciones
 
@@ -130,96 +132,111 @@ El asterisco (`*`) debe estar junto a `feature/ui-module`. Todos los commits de 
 open TaskManagerApp.xcodeproj
 ```
 
-2. En el **Project Navigator** (⌘1), verifica que existan los siguientes archivos dentro del grupo `Models/` (o la carpeta donde los creaste en el Lab 01):
+2. En el **Project Navigator** (⌘1), verifica que existan los archivos del Lab 01:
 
-   - `Task.swift` — contiene `struct Task` con propiedades `id`, `title`, `description`, `isCompleted` y `createdAt`.
-   - `TaskRepository.swift` — contiene el protocolo `TaskRepository` con métodos `getAll()`, `add(_:)`, `update(_:)`, `delete(id:)`.
-   - `InMemoryTaskRepository.swift` — implementación en memoria del protocolo.
+   - `Models/TaskItem.swift` — `enum Priority` y `struct TaskItem` con las propiedades `id`, `title`, `taskDescription` (opcional), `isCompleted`, `priority`, `createdAt` y `dueDate` (opcional). **No lo modifiques.**
+   - `Services/TaskRepository.swift` — protocolo `TaskRepository` e implementación `InMemoryTaskRepository`.
 
-3. Si el archivo `InMemoryTaskRepository.swift` no existe aún, créalo ahora. Haz clic derecho en el grupo `Models/` → **New File…** → **Swift File** → nombre: `InMemoryTaskRepository`. Añade el siguiente contenido:
+3. **¿Por qué cambiar el repositorio?** En el Lab 01, `InMemoryTaskRepository` es un `struct` con métodos `mutating`. Un struct es un tipo por valor: si UIKit y SwiftUI reciben el repositorio, cada uno trabaja con su propia copia y las tareas creadas en un flujo no aparecen en el otro. Además, un método `mutating` no se puede llamar sobre una constante (`let repository`), que es como lo guardan los controladores. Con una `class` (tipo por referencia) ambas interfaces comparten la misma instancia.
 
-```swift
-import Foundation
-
-class InMemoryTaskRepository: TaskRepository {
-    
-    private var tasks: [Task] = []
-    
-    init() {
-        // Datos de ejemplo para desarrollo
-        tasks = [
-            Task(
-                id: UUID(),
-                title: "Comprar víveres",
-                description: "Leche, pan, huevos y frutas",
-                isCompleted: false,
-                createdAt: Date()
-            ),
-            Task(
-                id: UUID(),
-                title: "Estudiar Swift",
-                description: "Repasar protocolos y genéricos",
-                isCompleted: true,
-                createdAt: Date().addingTimeInterval(-86400)
-            ),
-            Task(
-                id: UUID(),
-                title: "Hacer ejercicio",
-                description: "Correr 5 km en el parque",
-                isCompleted: false,
-                createdAt: Date().addingTimeInterval(-172800)
-            )
-        ]
-    }
-    
-    func getAll() -> [Task] {
-        return tasks
-    }
-    
-    func add(_ task: Task) {
-        tasks.append(task)
-    }
-    
-    func update(_ task: Task) {
-        if let index = tasks.firstIndex(where: { $0.id == task.id }) {
-            tasks[index] = task
-        }
-    }
-    
-    func delete(id: UUID) {
-        tasks.removeAll { $0.id == id }
-    }
-}
-```
-
-4. Asegúrate de que `Task.swift` tenga al menos esta estructura (ajusta si tu Lab 01 difiere ligeramente):
+4. Abre `Services/TaskRepository.swift` y reemplaza su contenido por la siguiente versión. Los métodos y los nombres son los mismos del Lab 01; los únicos cambios son: se quita `mutating`, el repositorio pasa a ser `final class` y se agrega un inicializador opcional con tareas de ejemplo:
 
 ```swift
+//
+//  TaskRepository.swift
+//  TaskManagerApp
+//
+//  Lab 02: repositorio compartido por UIKit y SwiftUI (tipo por referencia)
+//
+
 import Foundation
 
-struct Task: Identifiable {
-    let id: UUID
-    var title: String
-    var description: String
-    var isCompleted: Bool
-    var createdAt: Date
-}
-```
-
-5. Asegúrate de que `TaskRepository.swift` contenga:
-
-```swift
-import Foundation
+// MARK: - TaskRepository Protocol
 
 protocol TaskRepository {
-    func getAll() -> [Task]
-    func add(_ task: Task)
-    func update(_ task: Task)
-    func delete(id: UUID)
+    func fetchAll() -> [TaskItem]
+    func fetchById(_ id: UUID) -> TaskItem?
+    func add(_ task: TaskItem)
+    @discardableResult func update(_ task: TaskItem) -> Bool
+    @discardableResult func delete(byId id: UUID) -> Bool
+    func filter(where predicate: (TaskItem) -> Bool) -> [TaskItem]
+}
+
+// MARK: - InMemoryTaskRepository
+
+/// Implementación en memoria. Es una clase para que todas las vistas
+/// compartan la misma instancia y vean los mismos datos.
+final class InMemoryTaskRepository: TaskRepository {
+
+    private var tasks: [TaskItem] = []
+
+    var count: Int { tasks.count }
+
+    /// - Parameter seedSampleData: si es `true`, carga 3 tareas de ejemplo
+    ///   (útil para la app y para los previews de SwiftUI).
+    init(seedSampleData: Bool = false) {
+        guard seedSampleData else { return }
+        tasks = [
+            TaskItem(title: "Comprar víveres",
+                     taskDescription: "Leche, pan, huevos y frutas"),
+            TaskItem(title: "Estudiar Swift",
+                     taskDescription: "Repasar protocolos y genéricos",
+                     isCompleted: true,
+                     priority: .high),
+            TaskItem(title: "Hacer ejercicio",
+                     taskDescription: "Correr 5 km en el parque",
+                     priority: .low)
+        ]
+    }
+
+    func fetchAll() -> [TaskItem] { tasks }
+
+    func fetchById(_ id: UUID) -> TaskItem? {
+        tasks.first { $0.id == id }
+    }
+
+    func add(_ task: TaskItem) {
+        tasks.append(task)
+        print("📝 Tarea agregada: \(task.title) | Total: \(tasks.count)")
+    }
+
+    @discardableResult
+    func update(_ task: TaskItem) -> Bool {
+        guard let index = tasks.firstIndex(where: { $0.id == task.id }) else {
+            print("⚠️ Tarea no encontrada para actualizar: \(task.id)")
+            return false
+        }
+        tasks[index] = task
+        print("🔄 Tarea actualizada: \(task.title)")
+        return true
+    }
+
+    @discardableResult
+    func delete(byId id: UUID) -> Bool {
+        guard let index = tasks.firstIndex(where: { $0.id == id }) else {
+            print("⚠️ Tarea no encontrada para eliminar: \(id)")
+            return false
+        }
+        let removed = tasks.remove(at: index)
+        print("🗑️ Tarea eliminada: \(removed.title) | Total: \(tasks.count)")
+        return true
+    }
+
+    func filter(where predicate: (TaskItem) -> Bool) -> [TaskItem] {
+        tasks.filter(predicate)
+    }
+
+    // MARK: Convenience Methods (Lab 01)
+
+    func pendingTasks() -> [TaskItem] { filter { !$0.isCompleted } }
+    func completedTasks() -> [TaskItem] { filter { $0.isCompleted } }
+    func tasks(withPriority priority: Priority) -> [TaskItem] { filter { $0.priority == priority } }
+    func tasksSortedByPriority() -> [TaskItem] { tasks.sorted { $0.priority.rawValue > $1.priority.rawValue } }
+    func overdueTasks() -> [TaskItem] { filter { $0.isOverdue() } }
 }
 ```
 
-6. Compila el proyecto con **⌘B**. Debe compilar sin errores.
+5. Compila el proyecto con **⌘B**. El `ViewController.swift` del Lab 01 sigue compilando: usa `var repo = InMemoryTaskRepository()` y, como ahora es una clase, Xcode puede mostrar el aviso *"Variable 'repo' was never mutated"*. Puedes cambiar `var` por `let` o ignorar el aviso.
 
 ### Salida Esperada
 
@@ -227,7 +244,9 @@ En la barra de estado de Xcode: **Build Succeeded**.
 
 ### Verificación
 
-Si hay errores de compilación, revisa que los nombres de tipos y métodos coincidan exactamente entre los tres archivos. Corrige antes de continuar.
+- `TaskItem.swift` no tiene cambios respecto al Lab 01 (`git diff Models/TaskItem.swift` no muestra nada).
+- El protocolo `TaskRepository` ya no tiene métodos `mutating` y `InMemoryTaskRepository` es una `final class`.
+- Al ejecutar la app (⌘R), la consola sigue mostrando las pruebas del Lab 01 con los mismos mensajes y totales, porque esas pruebas crean el repositorio sin datos de ejemplo. (A partir del Paso 3 la pantalla inicial será la lista de tareas y esas pruebas dejarán de ejecutarse.)
 
 ---
 
@@ -294,8 +313,8 @@ class TaskListViewController: UITableViewController {
     
     // MARK: - Properties
     
-    private let repository: TaskRepository = InMemoryTaskRepository()
-    private var tasks: [Task] = []
+    private let repository: TaskRepository = InMemoryTaskRepository(seedSampleData: true)
+    private var tasks: [TaskItem] = []
     
     // MARK: - Lifecycle
     
@@ -326,7 +345,7 @@ class TaskListViewController: UITableViewController {
     }
     
     private func loadTasks() {
-        tasks = repository.getAll()
+        tasks = repository.fetchAll()
         tableView.reloadData()
     }
     
@@ -363,7 +382,7 @@ class TaskListViewController: UITableViewController {
         // Configuración de contenido (iOS 14+)
         var content = cell.defaultContentConfiguration()
         content.text = task.title
-        content.secondaryText = task.description
+        content.secondaryText = task.taskDescription
         content.image = UIImage(
             systemName: task.isCompleted
                 ? "checkmark.circle.fill"
@@ -402,7 +421,7 @@ class TaskListViewController: UITableViewController {
         ) { [weak self] _, _, completionHandler in
             guard let self = self else { return }
             let task = self.tasks[indexPath.row]
-            self.repository.delete(id: task.id)
+            self.repository.delete(byId: task.id)
             self.tasks.remove(at: indexPath.row)
             tableView.deleteRows(
                 at: [indexPath],
@@ -420,7 +439,7 @@ class TaskListViewController: UITableViewController {
     override func prepare(for segue: UIStoryboardSegue, sender: Any?) {
         if segue.identifier == "showTaskDetail",
            let detailVC = segue.destination as? TaskDetailViewController,
-           let task = sender as? Task {
+           let task = sender as? TaskItem {
             detailVC.task = task
             detailVC.repository = repository
         } else if segue.identifier == "presentAddTask",
@@ -516,7 +535,7 @@ class TaskDetailViewController: UIViewController {
     
     // MARK: - Properties
     
-    var task: Task?
+    var task: TaskItem?
     var repository: TaskRepository?
     
     private let dateFormatter: DateFormatter = {
@@ -542,7 +561,7 @@ class TaskDetailViewController: UIViewController {
         guard let task = task else { return }
         
         titleLabel.text = task.title
-        descriptionTextView.text = task.description
+        descriptionTextView.text = task.taskDescription ?? ""
         completedSwitch.isOn = task.isCompleted
         completedLabel.text = "Completada"
         dateLabel.text = "Creada: \(dateFormatter.string(from: task.createdAt))"
@@ -702,12 +721,11 @@ class AddTaskViewController: UIViewController {
             return
         }
         
-        let newTask = Task(
-            id: UUID(),
+        let descriptionText = descriptionTextView.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let newTask = TaskItem(
             title: title.trimmingCharacters(in: .whitespaces),
-            description: descriptionTextView.text ?? "",
-            isCompleted: completedSwitch.isOn,
-            createdAt: Date()
+            taskDescription: descriptionText.isEmpty ? nil : descriptionText,
+            isCompleted: completedSwitch.isOn
         )
         
         repository?.add(newTask)
@@ -770,7 +788,7 @@ git status
    - `UIKitViews/TaskDetailViewController.swift`
    - `UIKitViews/AddTaskViewController.swift`
    - Cambios en `Main.storyboard`
-   - `InMemoryTaskRepository.swift` (si fue creado en este lab)
+   - Cambios en `Services/TaskRepository.swift` (repositorio convertido en clase)
 
 3. Haz el commit:
 
@@ -834,7 +852,7 @@ import SwiftUI
 
 struct TaskRowView: View {
     
-    let task: Task
+    let task: TaskItem
     
     var body: some View {
         HStack(spacing: 12) {
@@ -849,7 +867,7 @@ struct TaskRowView: View {
                     .font(.headline)
                     .strikethrough(task.isCompleted, color: .gray)
                 
-                Text(task.description)
+                Text(task.taskDescription ?? "Sin descripción")
                     .font(.subheadline)
                     .foregroundColor(.secondary)
                     .lineLimit(2)
@@ -862,12 +880,9 @@ struct TaskRowView: View {
 }
 
 #Preview {
-    TaskRowView(task: Task(
-        id: UUID(),
+    TaskRowView(task: TaskItem(
         title: "Tarea de ejemplo",
-        description: "Descripción de prueba para la vista previa",
-        isCompleted: false,
-        createdAt: Date()
+        taskDescription: "Descripción de prueba para la vista previa"
     ))
     .padding()
 }
@@ -881,7 +896,7 @@ El Canvas muestra una fila con un icono de círculo gris, el título "Tarea de e
 
 ### Verificación
 
-Cambia `isCompleted` a `true` en el `#Preview` y verifica que el icono cambie a un checkmark verde y el título muestre tachado.
+Agrega `isCompleted: true` al `TaskItem` del `#Preview` y verifica que el icono cambie a un checkmark verde y el título muestre tachado.
 
 ---
 
@@ -904,7 +919,7 @@ struct TaskListView: View {
     
     let repository: TaskRepository
     
-    @State private var tasks: [Task] = []
+    @State private var tasks: [TaskItem] = []
     @State private var showingAddTask = false
     
     // MARK: - Body
@@ -953,19 +968,19 @@ struct TaskListView: View {
     // MARK: - Methods
     
     private func loadTasks() {
-        tasks = repository.getAll()
+        tasks = repository.fetchAll()
     }
     
     private func deleteTask(at offsets: IndexSet) {
         for index in offsets {
-            repository.delete(id: tasks[index].id)
+            repository.delete(byId: tasks[index].id)
         }
         loadTasks()
     }
 }
 
 #Preview {
-    TaskListView(repository: InMemoryTaskRepository())
+    TaskListView(repository: InMemoryTaskRepository(seedSampleData: true))
 }
 ```
 
@@ -998,7 +1013,7 @@ struct TaskDetailView: View {
     
     // MARK: - Properties
     
-    @State var task: Task
+    @State var task: TaskItem
     let repository: TaskRepository
     var onUpdate: () -> Void
     
@@ -1020,7 +1035,7 @@ struct TaskDetailView: View {
                         .font(.title2)
                         .fontWeight(.bold)
                     
-                    Text(task.description)
+                    Text(task.taskDescription ?? "Sin descripción")
                         .font(.body)
                         .foregroundColor(.secondary)
                 }
@@ -1049,12 +1064,9 @@ struct TaskDetailView: View {
 #Preview {
     NavigationStack {
         TaskDetailView(
-            task: Task(
-                id: UUID(),
+            task: TaskItem(
                 title: "Tarea de ejemplo",
-                description: "Una descripción detallada de la tarea",
-                isCompleted: false,
-                createdAt: Date()
+                taskDescription: "Una descripción detallada de la tarea"
             ),
             repository: InMemoryTaskRepository(),
             onUpdate: {}
@@ -1097,7 +1109,7 @@ struct AddTaskView: View {
     // MARK: - State
     
     @State private var title: String = ""
-    @State private var description: String = ""
+    @State private var taskDescription: String = ""
     @State private var isCompleted: Bool = false
     @State private var showingValidationAlert = false
     
@@ -1120,7 +1132,7 @@ struct AddTaskView: View {
                 }
                 
                 Section("Descripción") {
-                    TextEditor(text: $description)
+                    TextEditor(text: $taskDescription)
                         .frame(minHeight: 100)
                 }
                 
@@ -1165,12 +1177,11 @@ struct AddTaskView: View {
             return
         }
         
-        let newTask = Task(
-            id: UUID(),
+        let trimmedDescription = taskDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+        let newTask = TaskItem(
             title: trimmedTitle,
-            description: description,
-            isCompleted: isCompleted,
-            createdAt: Date()
+            taskDescription: trimmedDescription.isEmpty ? nil : trimmedDescription,
+            isCompleted: isCompleted
         )
         
         repository.add(newTask)
@@ -1421,6 +1432,23 @@ git branch -d feature/ui-module
 
 ---
 
+## Reto Opcional (KMP) — Lista de Tareas con Compose Multiplatform
+
+> Este reto es **opcional** y no forma parte de la evaluación. Se trabaja sobre el proyecto KMP del Lab 01.
+
+**Objetivo:** Mostrar la lista de tareas del módulo `shared` en una pantalla de Compose Multiplatform y abrirla desde la app iOS.
+
+**Instrucciones:**
+
+1. Verifica que el proyecto KMP del Lab 01 tenga habilitado Compose Multiplatform (el asistente lo agrega si marcaste la opción de UI compartida).
+2. En `commonMain`, crea un `@Composable fun ListaTareas(tareas: List<Tarea>)` que muestre las tareas con `LazyColumn`.
+3. En `iosMain`, expón la pantalla con `fun ListaTareasViewController() = ComposeUIViewController { ListaTareas(...) }`.
+4. En la app iOS, envuelve ese controlador en un `UIViewControllerRepresentable` y muéstralo desde SwiftUI (o haz push desde UIKit).
+
+**Resultado esperado:** la app iOS abre una pantalla Compose con las tareas del módulo `shared`, junto a las pantallas nativas de UIKit y SwiftUI.
+
+---
+
 ## Resumen
 
 En este laboratorio has construido **dos flujos de interfaz de usuario completos** para TaskManagerApp:
@@ -1434,7 +1462,7 @@ En este laboratorio has construido **dos flujos de interfaz de usuario completos
 | **Eliminación** | `trailingSwipeActionsConfiguration` | `.onDelete(perform:)` |
 | **Estado** | Propiedades + `reloadData()` | `@State`, `@Binding`, `@Environment` |
 
-Ambos flujos comparten el mismo `InMemoryTaskRepository`, demostrando la separación entre lógica de datos e interfaz. Has aplicado Auto Layout con constraints en Interface Builder, SF Symbols para iconografía, y gestión de estado declarativa en SwiftUI.
+Ambos flujos comparten la misma instancia de `InMemoryTaskRepository` (convertido en clase en el Paso 2), demostrando la separación entre lógica de datos e interfaz. Has aplicado Auto Layout con constraints en Interface Builder, SF Symbols para iconografía, y gestión de estado declarativa en SwiftUI.
 
 ### Recursos Adicionales
 

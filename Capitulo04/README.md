@@ -17,7 +17,7 @@ En esta práctica incremental añadirás la **capa de networking** al proyecto *
 ## Objetivos de Aprendizaje
 
 - [ ] Implementar un servicio de red con `URLSession` que realice peticiones GET y POST a JSONPlaceholder.
-- [ ] Parsear respuestas JSON usando `Codable` (`Decodable`/`Encodable`) y mapear datos remotos al modelo `TaskItem` de SwiftData.
+- [ ] Parsear respuestas JSON usando `Codable` (`Decodable`/`Encodable`) y mapear datos remotos al modelo de dominio `TaskItem`, que se persiste en SwiftData como `SDTaskItem`.
 - [ ] Gestionar la concurrencia con `async/await`, `Task` y `@MainActor` para actualizar la UI de forma segura.
 - [ ] Implementar manejo de errores de red con un `enum NetworkError` y mostrar estados de carga/éxito/error en la interfaz.
 - [ ] Sincronizar tareas remotas con el repositorio SwiftData local y confirmar los cambios con Git.
@@ -207,10 +207,10 @@ struct RemoteTask: Decodable, Identifiable, Sendable {
 3. Ahora crea la extensión con la función de conversión. En el mismo archivo, añade debajo del struct:
 
 ```swift
-// MARK: - Conversión a TaskItem (modelo SwiftData)
+// MARK: - Conversión a TaskItem (modelo de dominio)
 
 extension RemoteTask {
-    /// Convierte un `RemoteTask` remoto al modelo local `TaskItem` de SwiftData.
+    /// Convierte un `RemoteTask` remoto al modelo de dominio `TaskItem`.
     ///
     /// - Returns: Una instancia de `TaskItem` con los datos mapeados.
     ///
@@ -221,19 +221,21 @@ extension RemoteTask {
     /// - La `dueDate` se establece a 7 días desde la fecha actual.
     /// - La `priority` se asigna como `.medium` por defecto.
     func toTaskItem() -> TaskItem {
+        // Mismo orden de argumentos que el inicializador del Lab 01:
+        // title, taskDescription, isCompleted, priority, dueDate
         let item = TaskItem(
             title: title,
             taskDescription: "Importada de JSONPlaceholder (userId: \(userId), remoteId: \(id))",
-            dueDate: Calendar.current.date(byAdding: .day, value: 7, to: Date()) ?? Date(),
+            isCompleted: completed,
             priority: .medium,
-            isCompleted: completed
+            dueDate: Calendar.current.date(byAdding: .day, value: 7, to: Date())
         )
         return item
     }
 }
 ```
 
-> **Importante:** El modelo `TaskItem` ya existe en tu proyecto desde el Lab 03. Si tu `TaskItem` tiene propiedades o inicializadores distintos, ajusta la función `toTaskItem()` para que coincida con tu implementación. Los campos mínimos esperados son: `title` (String), `taskDescription` (String), `dueDate` (Date), `priority` (enum con caso `.medium`), `isCompleted` (Bool).
+> **Importante:** Desde el Lab 03 hay dos modelos: `TaskItem` (struct de dominio, la usan la red y los repositorios) y `SDTaskItem` (clase `@Model` de SwiftData). `RemoteTask` convierte a `TaskItem`; para guardar en SwiftData se usa `SDTaskItem(from:)`. El inicializador de `TaskItem` del Lab 01 ya acepta `priority` y `dueDate`; en Swift los argumentos con valor por defecto se pueden omitir, pero los que se pasan deben ir en el orden declarado (`title`, `taskDescription`, `isCompleted`, `priority`, `dueDate`).
 
 4. Crea un segundo archivo para el modelo de respuesta POST. Haz clic derecho sobre `Services/Network` → **New File…** → **Swift File** → nómbralo `RemoteTaskRequest.swift`:
 
@@ -264,7 +266,7 @@ struct RemoteTaskRequest: Encodable, Sendable {
     
     /// Crea un `RemoteTaskRequest` a partir de un `TaskItem` local.
     ///
-    /// - Parameter taskItem: El modelo local de SwiftData.
+    /// - Parameter taskItem: La tarea del modelo de dominio.
     init(from taskItem: TaskItem) {
         self.title = taskItem.title
         self.completed = taskItem.isCompleted
@@ -687,8 +689,8 @@ final class SyncViewModel {
     /// Flujo:
     /// 1. Establece estado `.loading`
     /// 2. Llama a `fetchRemoteTasks()` en el servicio de red
-    /// 3. Convierte cada `RemoteTask` a `TaskItem`
-    /// 4. Inserta los `TaskItem` en el contexto de SwiftData
+    /// 3. Convierte cada `RemoteTask` a `TaskItem` (dominio)
+    /// 4. Inserta un `SDTaskItem` por cada tarea en el contexto de SwiftData
     /// 5. Establece estado `.success` o `.error` según resultado
     func syncRemoteTasks() async {
         // Evitar sincronizaciones simultáneas
@@ -712,7 +714,7 @@ final class SyncViewModel {
             if let context = modelContext {
                 for remoteTask in remoteTasks {
                     let taskItem = remoteTask.toTaskItem()
-                    context.insert(taskItem)
+                    context.insert(SDTaskItem(from: taskItem))
                     insertedCount += 1
                 }
                 
@@ -870,32 +872,33 @@ struct SyncButtonView: View {
 
 2. Compila y abre el **Canvas** (⌥⌘↩) para verificar que el preview muestra los cuatro estados del botón.
 
-#### 6.2 — Modificar `TaskListView` para integrar la sincronización
+#### 6.2 — Integrar la sincronización en `SwiftDataTaskListView`
 
-3. Abre tu archivo de vista de lista de tareas SwiftUI existente (probablemente `TaskListView.swift` o similar del Lab 03). Si no tienes una vista con este nombre exacto, adapta las instrucciones a tu vista de lista existente.
+3. Abre `SwiftDataTaskListView.swift`, la vista con `@Query` que creaste en el Lab 03 (Paso 15). Usa esta vista y **no** `TaskListView`: `TaskListView` (Lab 02) recibe el repositorio por parámetro y la abre el botón "SwiftUI" de UIKit, así que si la reemplazaras por una versión sin ese parámetro el proyecto dejaría de compilar. `SwiftDataTaskListView` ya se abre desde el botón "SwiftData" con `.modelContainer(AppModelContainer.shared)`, que es lo que necesitan `@Query` y el `modelContext`.
 
-4. Modifica la vista para incluir el `SyncViewModel` y los elementos de UI de sincronización. A continuación se muestra la **estructura completa** — integra las secciones marcadas con `// 🆕 NUEVO` en tu vista existente:
+4. Reemplaza el contenido del archivo por la siguiente versión. Las secciones marcadas con `// 🆕 NUEVO` son las de sincronización; el alta de tareas ahora reutiliza `AddTaskView` del Lab 02 con un `SwiftDataTaskRepository`, y `@Query` refresca la lista sola:
 
 ```swift
 //
-//  TaskListView.swift
+//  SwiftDataTaskListView.swift
 //  TaskManagerApp
 //
-//  Vista principal que muestra la lista de tareas con sincronización remota.
+//  Lista de tareas en SwiftData con sincronización remota.
 //
 
 import SwiftUI
 import SwiftData
 
-struct TaskListView: View {
+struct SwiftDataTaskListView: View {
     
     // MARK: - Propiedades de SwiftData
     
     @Environment(\.modelContext) private var modelContext
-    @Query(sort: \TaskItem.dueDate, order: .forward) private var tasks: [TaskItem]
+    @Query(sort: \SDTaskItem.createdAt, order: .reverse) private var tasks: [SDTaskItem]
     
     // 🆕 NUEVO: ViewModel de sincronización
     @State private var syncViewModel = SyncViewModel()
+    @State private var showingAddTask = false
     
     var body: some View {
         NavigationStack {
@@ -917,11 +920,23 @@ struct TaskListView: View {
                     }
                 }
                 
-                ToolbarItem(placement: .topBarTrailing) {
-                    NavigationLink(destination: AddTaskView()) {
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    NavigationLink(destination: PreferencesView()) {
+                        Image(systemName: "gearshape")
+                    }
+                    Button {
+                        showingAddTask = true
+                    } label: {
                         Image(systemName: "plus")
                     }
                 }
+            }
+            // Alta de tareas: AddTaskView del Lab 02 guardando en SwiftData
+            .sheet(isPresented: $showingAddTask) {
+                AddTaskView(
+                    repository: SwiftDataTaskRepository(modelContext: modelContext),
+                    onSave: {}   // @Query actualiza la lista automáticamente
+                )
             }
             // 🆕 NUEVO: Alerta de error
             .alert(
@@ -999,7 +1014,7 @@ struct TaskListView: View {
             
             List {
                 ForEach(tasks) { task in
-                    TaskRowView(task: task)
+                    TaskRowView(task: task.toTaskItem())
                 }
                 .onDelete(perform: deleteTasks)
             }
@@ -1012,16 +1027,17 @@ struct TaskListView: View {
         for index in offsets {
             modelContext.delete(tasks[index])
         }
+        try? modelContext.save()
     }
 }
 
 #Preview {
-    TaskListView()
-        .modelContainer(for: TaskItem.self, inMemory: true)
+    SwiftDataTaskListView()
+        .modelContainer(for: SDTaskItem.self, inMemory: true)
 }
 ```
 
-> **Adaptación requerida:** Si tus vistas tienen nombres diferentes (`AddTaskView`, `TaskRowView`), ajusta las referencias. Lo esencial es integrar: (1) el `@State private var syncViewModel`, (2) el `SyncButtonView` en el toolbar, (3) la alerta de error, (4) el `.onAppear` que inyecta el `modelContext`, y (5) los banners de estado.
+> **Nota:** `TaskRowView` y `AddTaskView` son las vistas del Lab 02; `TaskRowView` recibe un `TaskItem`, por eso se usa `task.toTaskItem()`. Lo esencial de este paso es integrar: (1) el `@State private var syncViewModel`, (2) el `SyncButtonView` en el toolbar, (3) la alerta de error, (4) el `.onAppear` que inyecta el `modelContext`, y (5) los banners de estado.
 
 5. Compila con **⌘B**.
 
@@ -1029,7 +1045,7 @@ struct TaskListView: View {
 
 6. Ejecuta la aplicación en el simulador **iPhone 15 Pro** con **⌘R**.
 
-7. En la pantalla principal, pulsa el botón **"Sincronizar"** en la esquina superior izquierda de la barra de navegación.
+7. En la lista UIKit toca **SwiftData** y, en esa pantalla, pulsa el botón **"Sincronizar"** en la esquina superior izquierda de la barra de navegación.
 
 **Salida esperada:**
 
@@ -1063,9 +1079,19 @@ Confirma visualmente que:
 
 **Instrucciones:**
 
-1. Abre el `UIViewController` de lista de tareas de tu proyecto UIKit (creado en Labs anteriores). Si se llama `TaskListViewController.swift`, ábrelo. Si no tienes uno, crea un nuevo archivo `TaskListSyncViewController.swift` en el grupo de vistas UIKit.
+1. Abre `UIKitViews/TaskListViewController.swift` (Lab 02, actualizado en el Lab 03). La extensión de sincronización va en otro archivo, y en Swift un miembro `private` solo es visible dentro de su archivo. Quita `private` de estas dos declaraciones para que la extensión pueda usarlas:
 
-2. Añade la siguiente extensión (o intégrala en tu ViewController existente). Crea un archivo llamado `TaskListViewController+Sync.swift`:
+```swift
+// Antes (Lab 03):
+// private lazy var repository: TaskRepository = AppConfiguration.shared.makeRepository()
+// private func loadTasks() { ... }
+
+// Después:
+lazy var repository: TaskRepository = AppConfiguration.shared.makeRepository()
+func loadTasks() { ... }   // el cuerpo no cambia
+```
+
+2. En el grupo `UIKitViews`, crea el archivo `TaskListViewController+Sync.swift` con la siguiente extensión. El botón de sincronización se **agrega** a la izquierda de la barra sin quitar los botones "SwiftUI" (Lab 02) y "SwiftData" (Lab 03) que ya están ahí:
 
 ```swift
 //
@@ -1080,58 +1106,60 @@ import UIKit
 // MARK: - Extensión de sincronización para UIKit
 
 extension TaskListViewController {
-    
-    /// Configura los elementos de UI necesarios para la sincronización.
-    /// Llamar desde `viewDidLoad()`.
+
+    /// Identificador para reconocer el botón de sincronización (o su spinner)
+    /// entre los demás botones de la barra.
+    private static let syncItemID = "syncButton"
+
+    /// Configura el botón de sincronización. Llamar desde `viewDidLoad()`.
     func setupSyncUI() {
-        // Botón de sincronización en la barra de navegación
         let syncButton = UIBarButtonItem(
             image: UIImage(systemName: "arrow.triangle.2.circlepath"),
             style: .plain,
             target: self,
             action: #selector(syncButtonTapped)
         )
-        
-        // Añadir a la izquierda de la barra de navegación
-        navigationItem.leftBarButtonItem = syncButton
+        replaceSyncItem(with: syncButton)
     }
-    
+
+    /// Pone `item` en el lugar del botón de sincronización y conserva
+    /// los demás botones de la izquierda (SwiftUI, SwiftData).
+    private func replaceSyncItem(with item: UIBarButtonItem) {
+        item.accessibilityIdentifier = Self.syncItemID
+        let others = (navigationItem.leftBarButtonItems ?? [])
+            .filter { $0.accessibilityIdentifier != Self.syncItemID }
+        navigationItem.leftBarButtonItems = [item] + others
+    }
+
     /// Acción del botón de sincronización.
     @objc func syncButtonTapped() {
-        // Crear y mostrar el indicador de actividad
+        // Mostrar el indicador de actividad en lugar del botón
         let activityIndicator = UIActivityIndicatorView(style: .medium)
         activityIndicator.startAnimating()
-        let loadingButton = UIBarButtonItem(customView: activityIndicator)
-        navigationItem.leftBarButtonItem = loadingButton
-        
+        replaceSyncItem(with: UIBarButtonItem(customView: activityIndicator))
+
         // Usar Task { } para ejecutar código async desde un contexto síncrono
         Task {
             let service = TaskNetworkService()
-            
+
             do {
                 let remoteTasks = try await service.fetchRemoteTasks()
-                
-                // @MainActor: ya estamos en el main thread gracias a UIKit
-                // pero Task hereda el actor del contexto, que aquí es MainActor
-                
-                // Convertir y mostrar resultados
+
+                // Task hereda el MainActor del ViewController:
+                // podemos tocar la UI y el repositorio directamente.
                 let taskItems = remoteTasks.map { $0.toTaskItem() }
-                
-                // Aquí persistirías en SwiftData o actualizarías tu dataSource
-                // Ejemplo: self.tasks.append(contentsOf: taskItems)
-                // self.tableView.reloadData()
-                
-                // Mostrar alerta de éxito
+                taskItems.forEach { repository.add($0) }
+                loadTasks()
+
                 let alert = UIAlertController(
                     title: "Sincronización Exitosa",
                     message: "Se importaron \(taskItems.count) tareas remotas.",
                     preferredStyle: .alert
                 )
                 alert.addAction(UIAlertAction(title: "Aceptar", style: .default))
-                self.present(alert, animated: true)
-                
+                present(alert, animated: true)
+
             } catch let error as NetworkError {
-                // Mostrar alerta de error
                 let alert = UIAlertController(
                     title: "Error de Sincronización",
                     message: error.errorDescription,
@@ -1141,8 +1169,8 @@ extension TaskListViewController {
                 alert.addAction(UIAlertAction(title: "Reintentar", style: .default) { [weak self] _ in
                     self?.syncButtonTapped()
                 })
-                self.present(alert, animated: true)
-                
+                present(alert, animated: true)
+
             } catch {
                 let alert = UIAlertController(
                     title: "Error",
@@ -1150,15 +1178,17 @@ extension TaskListViewController {
                     preferredStyle: .alert
                 )
                 alert.addAction(UIAlertAction(title: "Aceptar", style: .default))
-                self.present(alert, animated: true)
+                present(alert, animated: true)
             }
-            
+
             // Restaurar el botón de sincronización
-            self.setupSyncUI()
+            setupSyncUI()
         }
     }
 }
 ```
+
+> **Nota:** Las tareas se guardan con el repositorio activo de `AppConfiguration` (SwiftData por defecto), así que también aparecen en la pantalla **SwiftData**. Cada sincronización vuelve a importar las 20 tareas con identificadores nuevos; evitar duplicados queda como ejercicio opcional.
 
 > **Nota sobre `Task { }` en UIKit:** Cuando creas un `Task { }` dentro de un método de un `UIViewController`, la tarea hereda el contexto de `MainActor` porque los ViewControllers de UIKit son implícitamente `@MainActor`. Esto significa que no necesitas `DispatchQueue.main.async` para actualizar la UI dentro del bloque `Task`.
 >
@@ -1173,7 +1203,7 @@ extension TaskListViewController {
 > }.resume()
 > ```
 
-3. En tu `TaskListViewController.viewDidLoad()`, añade la llamada a `setupSyncUI()`:
+3. En `TaskListViewController.viewDidLoad()`, añade la llamada a `setupSyncUI()` después de `configureNavigationBar()`:
 
 ```swift
 override func viewDidLoad() {
@@ -1187,13 +1217,11 @@ override func viewDidLoad() {
 
 **Salida esperada:** Build Succeeded.
 
-> **Nota:** Si tu proyecto no tiene un `TaskListViewController` de UIKit, puedes crear uno mínimo para este paso o marcar este paso como referencia y continuar con el Paso 8. La funcionalidad principal de sincronización está en SwiftUI (Paso 6).
-
 **Verificación:**
 
 Si ejecutas la vista UIKit, al pulsar el botón de sincronización:
-- El botón se reemplaza por un spinner
-- Tras completar, aparece una alerta con el conteo de tareas
+- El botón se reemplaza por un spinner y los botones "SwiftUI" y "SwiftData" siguen visibles
+- Tras completar, aparece una alerta con el conteo de tareas y la lista muestra las tareas importadas
 - El botón se restaura a su estado original
 
 ---
@@ -1244,7 +1272,7 @@ import Foundation
  2. Task { } (Creación de contexto asíncrono)
  ═══════════════════════════════════════════════════════════════
  
- Usado en: TaskListView (SwiftUI), TaskListViewController (UIKit)
+ Usado en: SwiftDataTaskListView (SwiftUI), TaskListViewController (UIKit)
  
  - Crea un contexto asíncrono desde código síncrono
  - Hereda el actor del contexto donde se crea
@@ -1375,7 +1403,7 @@ git commit -m "feat: network layer with URLSession and Codable
 - Add TaskNetworkService with async/await GET and POST methods
 - Add SyncViewModel with @MainActor and @Observable
 - Add SyncButtonView for SwiftUI sync UI
-- Integrate sync in TaskListView (SwiftUI) with loading/success/error states
+- Integrate sync in SwiftDataTaskListView (SwiftUI) with loading/success/error states
 - Add UIKit sync extension with UIActivityIndicatorView
 - Add concurrency patterns documentation"
 ```
@@ -1479,7 +1507,7 @@ xcodebuild -scheme TaskManagerApp -destination 'platform=iOS Simulator,name=iPho
 ### Prueba 4 — Estructura de archivos
 
 ```bash
-find TaskManagerApp/Services -name "*.swift" | sort
+find TaskManagerApp/Services/Network -name "*.swift" | sort
 ```
 
 **Resultado esperado:**
@@ -1528,7 +1556,7 @@ El commit `feat: network layer with URLSession and Codable` debe estar presente 
 
 **Solución:**
 
-1. Verifica que el `.onAppear` en `TaskListView` inyecta correctamente el `modelContext`:
+1. Verifica que el `.onAppear` en `SwiftDataTaskListView` inyecta correctamente el `modelContext`:
 
 ```swift
 .onAppear {
@@ -1548,7 +1576,7 @@ print("🔍 Tareas recibidas: \(remoteTasks.count)")
 ```
 
 3. Revisa la consola de Xcode (**⇧⌘C**) para ver dónde se detiene el flujo.
-4. Si ves `⚠️ ModelContext no disponible`, el contexto es `nil`. Verifica que tu `App` principal inyecta `.modelContainer(for: TaskItem.self)` en la jerarquía de vistas.
+4. Si ves `⚠️ ModelContext no disponible`, el contexto es `nil`. Verifica que la acción `showSwiftDataTapped(_:)` del Lab 03 aplica `.modelContainer(AppModelContainer.shared)` a `SwiftDataTaskListView` antes de crear el `UIHostingController`.
 5. Reduce el `timeoutInterval` en `TaskNetworkService` a `10` segundos para detectar timeouts más rápido.
 
 ---
@@ -1585,6 +1613,23 @@ nothing to commit, working tree clean
 
 ---
 
+## Reto Opcional (KMP) — Servicio de Red Compartido con Ktor
+
+> Este reto es **opcional** y no forma parte de la evaluación. Se trabaja sobre el proyecto KMP de los labs anteriores.
+
+**Objetivo:** Reescribir `TaskNetworkService` en el módulo `shared` con Ktor y kotlinx.serialization, y llamarlo desde la app iOS.
+
+**Instrucciones:**
+
+1. Agrega Ktor (`ktor-client-core`, `ktor-client-content-negotiation`, `ktor-serialization-kotlinx-json`) y los motores de cada plataforma (`ktor-client-okhttp` para Android y `ktor-client-darwin` para iOS).
+2. Declara el modelo remoto como `@Serializable data class` con los campos de `/todos` de JSONPlaceholder.
+3. Implementa en `commonMain` un servicio con funciones `suspend` para el GET de `/todos` y el POST de una tarea.
+4. Desde Swift, llama a las funciones `suspend` con `try await` y muestra las tareas en la app iOS.
+
+**Resultado esperado:** el servicio de red con Ktor vive en el módulo `shared` y la app iOS lo llama con `try await`, con el mismo resultado que la versión con `URLSession`.
+
+---
+
 ## Resumen
 
 En este laboratorio implementaste la **capa de networking completa** para TaskManagerApp:
@@ -1596,7 +1641,7 @@ En este laboratorio implementaste la **capa de networking completa** para TaskMa
 | **Errores tipados** | `NetworkError.swift` | Enum con casos específicos de error de red |
 | **Servicio de red** | `TaskNetworkService.swift` | GET/POST con `URLSession` + `async/await` |
 | **ViewModel** | `SyncViewModel.swift` | Orquesta sincronización con `@MainActor` + `@Observable` |
-| **Vista SwiftUI** | `SyncButtonView.swift` + `TaskListView` | UI reactiva con estados loading/success/error |
+| **Vista SwiftUI** | `SyncButtonView.swift` + `SwiftDataTaskListView` | UI reactiva con estados loading/success/error |
 | **Extensión UIKit** | `TaskListViewController+Sync.swift` | Sincronización con `Task { }` y `UIActivityIndicatorView` |
 | **Documentación** | `ConcurrencyNotes.swift` | Referencia de patrones de concurrencia |
 
@@ -1618,3 +1663,47 @@ En este laboratorio implementaste la **capa de networking completa** para TaskMa
 | JSONPlaceholder API | https://jsonplaceholder.typicode.com |
 | Codable — Apple Documentation | https://developer.apple.com/documentation/swift/codable |
 | @MainActor — Swift Evolution | https://github.com/apple/swift-evolution/blob/main/proposals/0316-global-actors.md |
+
+---
+
+## Anexo — Corrección pendiente en la presentación (diapositiva 274, «Indicador de Carga en UIKit»)
+
+El código de la diapositiva 274 es una versión resumida del Paso 7 y difiere del código de este laboratorio en tres puntos. Mientras no se actualice la diapositiva, **el código válido es el de este README**.
+
+| # | En la diapositiva 274 | En este README (Paso 7) | Por qué importa |
+|---|---|---|---|
+| 1 | `navigationItem.leftBarButtonItem = UIBarButtonItem(customView: indicator)` | `replaceSyncItem(with:)` actualiza `navigationItem.leftBarButtonItems` | Asignar `leftBarButtonItem` borra los botones "SwiftUI" (Lab 02) y "SwiftData" (Lab 03). |
+| 2 | `tasks = remote.map { $0.toTaskItem() }` y `tableView.reloadData()` | `taskItems.forEach { repository.add($0) }` y `loadTasks()` | La diapositiva solo muestra las tareas en pantalla. El README las guarda en el repositorio activo (SwiftData), así que no se pierden al volver a cargar la lista y también aparecen en la pantalla SwiftData. |
+| 3 | `mostrarError(error)` | `UIAlertController` con "Aceptar" y "Reintentar", distinguiendo `NetworkError` | `mostrarError(_:)` no existe en el proyecto, así que el código de la diapositiva no compila tal cual. |
+
+**Código de reemplazo sugerido para la diapositiva** (versión resumida y consistente con el README):
+
+```swift
+@objc func syncButtonTapped() {
+    // 1. Mostrar el indicador sin quitar los demás botones
+    let indicator = UIActivityIndicatorView(style: .medium)
+    indicator.startAnimating()
+    replaceSyncItem(with: UIBarButtonItem(customView: indicator))
+
+    // 2. Llamar código async desde un método síncrono
+    Task {
+        do {
+            let remote = try await TaskNetworkService().fetchRemoteTasks()
+            remote.map { $0.toTaskItem() }.forEach { repository.add($0) }
+            loadTasks()
+        } catch {
+            let alert = UIAlertController(title: "Error de Sincronización",
+                                          message: error.localizedDescription,
+                                          preferredStyle: .alert)
+            alert.addAction(UIAlertAction(title: "Aceptar", style: .cancel))
+            present(alert, animated: true)
+        }
+        // 3. Restaurar el botón de sincronización
+        setupSyncUI()
+    }
+}
+```
+
+**Puntos clave de la diapositiva que no cambian:** `UIActivityIndicatorView` con `startAnimating()` y `stopAnimating()`, `hidesWhenStopped` en `true` por defecto, `Task { }` que hereda el `MainActor` del ViewController y `ProgressView()` como equivalente en SwiftUI.
+
+> **Nota:** En la versión del README, `stopAnimating()` no hace falta, porque `setupSyncUI()` reemplaza el indicador por el botón y el indicador sale de la barra.
